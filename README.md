@@ -135,7 +135,7 @@ systemctl restart media-optimizer
 journalctl -u media-optimizer -f
 ```
 
-## Container Network Configuration
+## Container Network Configuration (optional)
 
 To access the server from outside the container, you'll need to either:
 

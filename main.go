@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"sync"
 
+	"media_optimizer/pkg/mediaopt"
 	"media_optimizer/pkg/rebuild"
 
 	"github.com/gorilla/websocket"
@@ -30,6 +31,7 @@ type OptimizationJob struct {
 	SourcePath string `json:"sourcePath"`
 	Status     string `json:"status"`
 	Progress   int    `json:"progress"`
+	Error      string `json:"error,omitempty"`
 }
 
 type RebuildResponse struct {
@@ -225,15 +227,27 @@ func optimizeMedia(job *OptimizationJob) {
 	job.Status = "processing"
 	activeJobs.Unlock()
 
-	// TODO: Implement actual media optimization using FFmpeg
-	// This will include:
-	// 1. Video optimization
-	// 2. Audio enhancement for 2:1 soundbar
-	// 3. Progress updates through WebSocket
+	// Create optimization parameters with default settings
+	params := mediaopt.NewDefaultAudioParams(job.SourcePath)
 
-	// For now, just mark as completed
+	// Perform optimization
+	result := mediaopt.OptimizeAudio(params)
+
+	// Update job status based on result
 	activeJobs.Lock()
-	job.Status = "completed"
-	job.Progress = 100
+	if result.Success {
+		job.Status = "completed"
+		job.Progress = 100
+	} else {
+		job.Status = "failed"
+		job.Error = result.Error.Error()
+	}
 	activeJobs.Unlock()
+
+	// Log the result
+	if result.Success {
+		log.Printf("Successfully optimized media: %s", job.SourcePath)
+	} else {
+		log.Printf("Failed to optimize media: %s, Error: %v", job.SourcePath, result.Error)
+	}
 }
