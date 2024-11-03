@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Media Optimizer</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #f0f2f5;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background-color: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .header {
+            margin-bottom: 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .file-browser {
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            padding: 10px;
+            margin-bottom: 20px;
+        }
+        .file-list {
+            list-style: none;
+            padding: 0;
+            margin: 0;
+        }
+        .file-item {
+            padding: 8px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            border-bottom: 1px solid #eee;
+        }
+        .file-item:hover {
+            background-color: #f5f5f5;
+        }
+        .file-item.selected {
+            background-color: #e3f2fd;
+        }
+        .file-icon {
+            margin-right: 10px;
+        }
+        .actions {
+            margin-top: 20px;
+        }
+        .button {
+            background-color: #1976d2;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 4px;
+            cursor: pointer;
+            margin-right: 10px;
+        }
+        .button.rebuild {
+            background-color: #4caf50;
+        }
+        .button:disabled {
+            background-color: #ccc;
+            cursor: not-allowed;
+        }
+        .progress-container {
+            margin-top: 20px;
+            display: none;
+        }
+        .progress-bar {
+            width: 100%;
+            height: 20px;
+            background-color: #f0f0f0;
+            border-radius: 10px;
+            overflow: hidden;
+        }
+        .progress {
+            width: 0%;
+            height: 100%;
+            background-color: #4caf50;
+            transition: width 0.3s ease;
+        }
+        .status {
+            margin-top: 10px;
+            font-size: 14px;
+            color: #666;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <div>
+                <h1>Media Optimizer</h1>
+                <p>Optimize your media files for better storage and sound quality</p>
+            </div>
+            <button id="rebuildBtn" class="button rebuild">Update & Rebuild</button>
+        </div>
+
+        <div class="file-browser">
+            <div class="current-path"></div>
+            <ul class="file-list"></ul>
+        </div>
+
+        <div class="actions">
+            <button id="optimizeBtn" class="button" disabled>Optimize Selected</button>
+        </div>
+
+        <div class="progress-container">
+            <div class="progress-bar">
+                <div class="progress"></div>
+            </div>
+            <div class="status">Ready to optimize...</div>
+        </div>
+    </div>
+
+    <script>
+        let currentPath = '/';
+        let selectedPath = null;
+        let ws = null;
+
+        function initWebSocket() {
+            ws = new WebSocket(`ws://${window.location.host}/ws`);
+            ws.onmessage = function(event) {
+                const data = JSON.parse(event.data);
+                updateProgress(data);
+            };
+        }
+
+        function updateProgress(data) {
+            const progressContainer = document.querySelector('.progress-container');
+            const progressBar = document.querySelector('.progress');
+            const status = document.querySelector('.status');
+
+            progressContainer.style.display = 'block';
+            progressBar.style.width = `${data.progress}%`;
+            status.textContent = data.status;
+        }
+
+        async function loadFiles(path) {
+            try {
+                const response = await fetch('/api/browse', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ path }),
+                });
+                const files = await response.json();
+                displayFiles(files);
+                currentPath = path;
+                document.querySelector('.current-path').textContent = `Current path: ${currentPath}`;
+            } catch (error) {
+                console.error('Error loading files:', error);
+            }
+        }
+
+        function displayFiles(files) {
+            const fileList = document.querySelector('.file-list');
+            fileList.innerHTML = '';
+
+            if (currentPath !== '/') {
+                const parentItem = document.createElement('li');
+                parentItem.className = 'file-item';
+                parentItem.innerHTML = '<span class="file-icon">📁</span> ..';
+                parentItem.onclick = () => {
+                    const parentPath = currentPath.split('/').slice(0, -1).join('/') || '/';
+                    loadFiles(parentPath);
+                };
+                fileList.appendChild(parentItem);
+            }
+
+            files.forEach(file => {
+                const item = document.createElement('li');
+                item.className = 'file-item';
+                item.innerHTML = `<span class="file-icon">${file.isDir ? '📁' : '📄'}</span> ${file.name}`;
+                
+                item.onclick = () => {
+                    if (file.isDir) {
+                        loadFiles(file.path);
+                    } else {
+                        selectedPath = file.path;
+                        document.querySelectorAll('.file-item').forEach(i => i.classList.remove('selected'));
+                        item.classList.add('selected');
+                        document.getElementById('optimizeBtn').disabled = false;
+                    }
+                };
+
+                fileList.appendChild(item);
+            });
+        }
+
+        async function optimizeSelected() {
+            if (!selectedPath) return;
+
+            try {
+                const response = await fetch('/api/optimize', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ path: selectedPath }),
+                });
+                const result = await response.json();
+                document.querySelector('.progress-container').style.display = 'block';
+                document.querySelector('.status').textContent = 'Optimization started...';
+            } catch (error) {
+                console.error('Error starting optimization:', error);
+            }
+        }
+
+        async function rebuild() {
+            const rebuildBtn = document.getElementById('rebuildBtn');
+            rebuildBtn.disabled = true;
+            rebuildBtn.textContent = 'Rebuilding...';
+
+            try {
+                const response = await fetch('/api/rebuild', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    }
+                });
+                const result = await response.json();
+                alert(result.message);
+                // Reload the page to use the new binary
+                window.location.reload();
+            } catch (error) {
+                console.error('Error during rebuild:', error);
+                alert('Error during rebuild: ' + error.message);
+            } finally {
+                rebuildBtn.disabled = false;
+                rebuildBtn.textContent = 'Update & Rebuild';
+            }
+        }
+
+        // Initialize
+        document.addEventListener('DOMContentLoaded', () => {
+            initWebSocket();
+            loadFiles('/');
+            document.getElementById('optimizeBtn').onclick = optimizeSelected;
+            document.getElementById('rebuildBtn').onclick = rebuild;
+        });
+    </script>
+</body>
+</html>
