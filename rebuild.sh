@@ -11,9 +11,31 @@ check_service_status() {
     sudo systemctl status media-optimizer.service 2>&1 || true
 }
 
-# Show service configuration
-echo "Current service configuration:"
-sudo systemctl cat media-optimizer.service
+# Verify service file exists
+if [ ! -f "/etc/systemd/system/media-optimizer.service" ]; then
+    echo "ERROR: Service file missing. Creating default service file..."
+    # Create service file if missing
+    sudo tee /etc/systemd/system/media-optimizer.service > /dev/null << EOL
+[Unit]
+Description=Media Optimizer Server
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/media-optimizer
+ExecStart=/root/media-optimizer/media-optimizer
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
+EOL
+fi
+
+# Show current service file
+echo "Current service file contents:"
+sudo cat /etc/systemd/system/media-optimizer.service
 
 # Pull latest changes
 echo "Pulling latest changes..."
@@ -22,9 +44,11 @@ if ! git pull; then
     exit 1
 fi
 
-# Stop service with sudo
-echo "Stopping media-optimizer service..."
+# Stop service and wait
+echo "Stopping service..."
 sudo systemctl stop media-optimizer.service || true
+echo "Waiting for service to fully stop..."
+sleep 3
 
 # Build the binary with proper Linux output name
 echo "Building binary..."
@@ -33,46 +57,40 @@ if ! GOOS=linux go build -o media-optimizer; then
     exit 1
 fi
 
-# Get absolute path
-BINARY_PATH="$(pwd)/media-optimizer"
-
 # Ensure proper permissions
 echo "Setting binary permissions..."
-sudo chmod 755 "$BINARY_PATH"
+sudo chmod 755 media-optimizer
 
-# Print working directory and binary location
-echo "Current environment:"
-pwd
-ls -l "$BINARY_PATH"
+# Restart systemd itself
+echo "Restarting systemd daemon..."
+sudo systemctl daemon-reload
 
-# Start service with full path and error capture
+# Enable service if not enabled
+echo "Enabling service..."
+sudo systemctl enable media-optimizer.service || true
+
+# Start service with status check
 echo "Starting service..."
-START_OUTPUT=$(sudo systemctl start media-optimizer.service 2>&1)
-START_STATUS=$?
-
-if [ $START_STATUS -ne 0 ]; then
-    echo "Failed to start service. Error output:"
-    echo "$START_OUTPUT"
-    echo "Trying direct execution..."
-    sudo "$BINARY_PATH" 2>&1
+if ! sudo systemctl start media-optimizer.service; then
+    echo "Failed to start service. Checking status..."
+    check_service_status
+    echo "Checking logs..."
+    sudo journalctl -u media-optimizer.service -n 50 --no-pager --since "10 seconds ago"
+    echo "Trying direct execution for debugging..."
+    sudo ./media-optimizer
     exit 1
 fi
 
-# Check logs immediately after start
-echo "Checking service logs..."
-sudo journalctl -u media-optimizer.service -n 50 --no-pager --since "10 seconds ago"
+# Verify service is enabled and running
+echo "Verifying service state..."
+sudo systemctl is-enabled media-optimizer.service
+sudo systemctl is-active media-optimizer.service
 
-# Give it a moment to start
-sleep 2
-
-# Final status check
-echo "Final service status:"
-check_service_status
-
+# Show running processes
 echo "Process information:"
 ps aux | grep media-optimizer
 
-echo "Port status:"
-sudo netstat -tulpn | grep media-optimizer
-
 echo "Rebuild completed successfully"
+
+# Final status
+check_service_status
