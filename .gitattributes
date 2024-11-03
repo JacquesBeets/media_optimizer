@@ -1,3 +1,5 @@
-* -text
-*.sh -text eol=lf
-*.sh -exec
+* text=auto eol=lf
+*.sh text eol=lf
+*.sh linguist-language=Shell
+*.sh linguist-vendored=false
+*.sh -text
