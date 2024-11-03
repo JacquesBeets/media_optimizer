@@ -57,60 +57,9 @@ func (sm *ServiceManager) getStatus() (string, error) {
 	return strings.TrimSpace(string(output)), nil
 }
 
-func (sm *ServiceManager) stop() error {
-	log.Printf("Stopping %s...", sm.serviceName)
-
-	// Force stop the service
-	if err := sm.execSystemCtl("stop", "--force", sm.serviceName); err != nil {
-		log.Printf("Warning: Force stop failed: %v", err)
-	}
-
-	// Kill any remaining processes
-	if err := exec.Command("pkill", "-f", BinaryName).Run(); err != nil {
-		log.Printf("Warning: pkill failed: %v", err)
-	}
-
-	return nil
-}
-
-func (sm *ServiceManager) reloadDaemon() error {
-	log.Println("Reloading systemd daemon...")
-	return sm.execSystemCtl("daemon-reload")
-}
-
-func (sm *ServiceManager) resetFailed() error {
-	log.Println("Resetting failed state...")
-	return sm.execSystemCtl("reset-failed", sm.serviceName)
-}
-
-func (sm *ServiceManager) start() error {
-	log.Printf("Starting %s...", sm.serviceName)
-
-	// Reset any failed state
-	if err := sm.resetFailed(); err != nil {
-		log.Printf("Warning: reset-failed error: %v", err)
-	}
-
-	// Reload daemon
-	if err := sm.reloadDaemon(); err != nil {
-		log.Printf("Warning: daemon-reload error: %v", err)
-	}
-
-	// Try to start the service
-	if err := sm.execSystemCtl("start", sm.serviceName); err != nil {
-		// Get detailed status
-		cmd := exec.Command("systemctl", "status", sm.serviceName)
-		output, _ := cmd.CombinedOutput()
-		log.Printf("Service status after failed start:\n%s", string(output))
-
-		// Get journal logs
-		cmd = exec.Command("journalctl", "-u", sm.serviceName, "-n", "50", "--no-pager")
-		output, _ = cmd.CombinedOutput()
-		log.Printf("Recent service logs:\n%s", string(output))
-		return err
-	}
-
-	return nil
+func (sm *ServiceManager) restart() error {
+	log.Printf("Restarting %s...", sm.serviceName)
+	return sm.execSystemCtl("restart", sm.serviceName)
 }
 
 func (sm *ServiceManager) waitForStatus(expectedStatus string, timeout time.Duration) error {
@@ -279,42 +228,14 @@ func ExecuteRebuild() RebuildResult {
 	if isLinux() {
 		sm := NewServiceManager(ServiceName)
 
-		// Stop service
-		if err := sm.stop(); err != nil {
-			result.Error = fmt.Errorf("failed to stop service: %v", err)
-			result.Message = "Failed to stop service"
+		// Restart the service
+		if err := sm.restart(); err != nil {
+			result.Error = fmt.Errorf("failed to restart service: %v", err)
+			result.Message = "Failed to restart service"
 			return result
 		}
 
-		// Wait for service to stop
-		if err := sm.waitForStatus("inactive", 30*time.Second); err != nil {
-			result.Error = fmt.Errorf("service failed to stop: %v", err)
-			result.Message = "Service failed to stop"
-			return result
-		}
-
-		log.Println("Service stopped successfully, preparing for restart...")
-
-		// Force a small delay to ensure the system is ready
-		time.Sleep(2 * time.Second)
-
-		// Reset failed state and reload daemon
-		if err := sm.resetFailed(); err != nil {
-			log.Printf("Warning: Failed to reset failed state: %v", err)
-		}
-
-		if err := sm.reloadDaemon(); err != nil {
-			log.Printf("Warning: Failed to reload daemon: %v", err)
-		}
-
-		// Start the service
-		if err := sm.start(); err != nil {
-			result.Error = fmt.Errorf("failed to start service: %v", err)
-			result.Message = "Failed to start service"
-			return result
-		}
-
-		// Wait for service to start
+		// Wait for service to become active
 		if err := sm.waitForStatus("active", 30*time.Second); err != nil {
 			result.Error = fmt.Errorf("service failed to start: %v", err)
 			result.Message = "Service failed to start"
