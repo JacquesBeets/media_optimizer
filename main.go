@@ -105,26 +105,18 @@ func handleRebuild(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Run git pull
-	gitCmd := exec.Command("git", "pull")
-	gitOutput, err := gitCmd.CombinedOutput()
+	// Execute the rebuild script
+	cmd := exec.Command("cmd", "/C", "rebuild.bat")
+	output, err := cmd.CombinedOutput()
 	if err != nil {
-		http.Error(w, fmt.Sprintf("Git pull failed: %v\n%s", err, string(gitOutput)), http.StatusInternalServerError)
-		return
-	}
-
-	// Run go build
-	buildCmd := exec.Command("go", "build", "-o", "media_optimizer.exe")
-	buildOutput, err := buildCmd.CombinedOutput()
-	if err != nil {
-		http.Error(w, fmt.Sprintf("Build failed: %v\n%s", err, string(buildOutput)), http.StatusInternalServerError)
+		http.Error(w, fmt.Sprintf("Rebuild failed: %v\n%s", err, string(output)), http.StatusInternalServerError)
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{
 		"status":  "success",
-		"message": "Rebuild completed successfully",
+		"message": "Rebuild completed successfully. Server will restart.",
 	})
 }
 

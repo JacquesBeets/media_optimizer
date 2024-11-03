@@ -93,6 +93,36 @@
             font-size: 14px;
             color: #666;
         }
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0,0,0,0.5);
+            align-items: center;
+            justify-content: center;
+        }
+        .modal-content {
+            background-color: white;
+            padding: 20px;
+            border-radius: 8px;
+            text-align: center;
+        }
+        .spinner {
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #4caf50;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 20px auto;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
     </style>
 </head>
 <body>
@@ -122,10 +152,22 @@
         </div>
     </div>
 
+    <div id="rebuildModal" class="modal">
+        <div class="modal-content">
+            <h2>Rebuilding Application</h2>
+            <div class="spinner"></div>
+            <p>The server will restart momentarily...</p>
+            <p>This page will automatically reconnect.</p>
+        </div>
+    </div>
+
     <script>
         let currentPath = '/';
         let selectedPath = null;
         let ws = null;
+        let reconnectAttempts = 0;
+        const maxReconnectAttempts = 30; // 30 seconds
+        let reconnectInterval = null;
 
         function initWebSocket() {
             ws = new WebSocket(`ws://${window.location.host}/ws`);
@@ -133,6 +175,35 @@
                 const data = JSON.parse(event.data);
                 updateProgress(data);
             };
+            ws.onclose = function() {
+                // Only attempt to reconnect if we're showing the rebuild modal
+                if (document.getElementById('rebuildModal').style.display === 'flex') {
+                    attemptReconnect();
+                }
+            };
+        }
+
+        function attemptReconnect() {
+            if (reconnectAttempts >= maxReconnectAttempts) {
+                alert('Server reconnection failed. Please refresh the page manually.');
+                document.getElementById('rebuildModal').style.display = 'none';
+                return;
+            }
+
+            reconnectAttempts++;
+            fetch('/')
+                .then(response => {
+                    if (response.ok) {
+                        window.location.reload();
+                    } else {
+                        throw new Error('Server not ready');
+                    }
+                })
+                .catch(() => {
+                    if (!reconnectInterval) {
+                        reconnectInterval = setInterval(attemptReconnect, 1000);
+                    }
+                });
         }
 
         function updateProgress(data) {
@@ -220,7 +291,10 @@
         async function rebuild() {
             const rebuildBtn = document.getElementById('rebuildBtn');
             rebuildBtn.disabled = true;
-            rebuildBtn.textContent = 'Rebuilding...';
+            
+            // Show the rebuild modal
+            document.getElementById('rebuildModal').style.display = 'flex';
+            reconnectAttempts = 0;
 
             try {
                 const response = await fetch('/api/rebuild', {
@@ -229,16 +303,18 @@
                         'Content-Type': 'application/json',
                     }
                 });
-                const result = await response.json();
-                alert(result.message);
-                // Reload the page to use the new binary
-                window.location.reload();
+                
+                if (!response.ok) {
+                    throw new Error('Rebuild failed');
+                }
+
+                // The server will restart, and the WebSocket will close
+                // triggering the reconnection process
             } catch (error) {
                 console.error('Error during rebuild:', error);
                 alert('Error during rebuild: ' + error.message);
-            } finally {
+                document.getElementById('rebuildModal').style.display = 'none';
                 rebuildBtn.disabled = false;
-                rebuildBtn.textContent = 'Update & Rebuild';
             }
         }
 
