@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
@@ -20,13 +21,23 @@ const (
 // ServiceManager handles service operations
 type ServiceManager struct {
 	serviceName string
+	workingDir  string
 }
 
 func NewServiceManager(name string) *ServiceManager {
-	return &ServiceManager{serviceName: name}
+	wd, err := os.Getwd()
+	if err != nil {
+		log.Printf("Warning: Could not get working directory: %v", err)
+		wd = "."
+	}
+	return &ServiceManager{
+		serviceName: name,
+		workingDir:  wd,
+	}
 }
 
 func (sm *ServiceManager) execSystemCtl(args ...string) error {
+	log.Printf("Executing systemctl %s", strings.Join(args, " "))
 	cmd := exec.Command("systemctl", args...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -53,11 +64,22 @@ func (sm *ServiceManager) stop() error {
 
 func (sm *ServiceManager) start() error {
 	log.Printf("Starting %s...", sm.serviceName)
+
+	// Force a daemon-reload first
+	if err := sm.execSystemCtl("daemon-reload"); err != nil {
+		log.Printf("Warning: daemon-reload failed: %v", err)
+	}
+
 	if err := sm.execSystemCtl("start", sm.serviceName); err != nil {
 		// If start fails, try to get more information
 		cmd := exec.Command("systemctl", "status", sm.serviceName)
 		output, _ := cmd.CombinedOutput()
 		log.Printf("Service status after failed start:\n%s", string(output))
+
+		// Also check journal logs
+		cmd = exec.Command("journalctl", "-u", sm.serviceName, "-n", "50", "--no-pager")
+		output, _ = cmd.CombinedOutput()
+		log.Printf("Recent service logs:\n%s", string(output))
 		return err
 	}
 	return nil
@@ -65,11 +87,22 @@ func (sm *ServiceManager) start() error {
 
 func (sm *ServiceManager) restart() error {
 	log.Printf("Restarting %s...", sm.serviceName)
+
+	// Force a daemon-reload first
+	if err := sm.execSystemCtl("daemon-reload"); err != nil {
+		log.Printf("Warning: daemon-reload failed: %v", err)
+	}
+
 	if err := sm.execSystemCtl("restart", sm.serviceName); err != nil {
 		// If restart fails, try to get more information
 		cmd := exec.Command("systemctl", "status", sm.serviceName)
 		output, _ := cmd.CombinedOutput()
 		log.Printf("Service status after failed restart:\n%s", string(output))
+
+		// Also check journal logs
+		cmd = exec.Command("journalctl", "-u", sm.serviceName, "-n", "50", "--no-pager")
+		output, _ = cmd.CombinedOutput()
+		log.Printf("Recent service logs:\n%s", string(output))
 		return err
 	}
 	return nil
@@ -84,6 +117,11 @@ func (sm *ServiceManager) waitForStatus(expectedStatus string, timeout time.Dura
 			cmd := exec.Command("systemctl", "status", sm.serviceName)
 			output, _ := cmd.CombinedOutput()
 			log.Printf("Service status on timeout:\n%s", string(output))
+
+			// Also check journal logs
+			cmd = exec.Command("journalctl", "-u", sm.serviceName, "-n", "50", "--no-pager")
+			output, _ = cmd.CombinedOutput()
+			log.Printf("Recent service logs:\n%s", string(output))
 			return fmt.Errorf("timeout waiting for service status: %s", expectedStatus)
 		}
 
@@ -123,10 +161,19 @@ func (g *GitOperations) checkStatus() error {
 // Builder handles the build process
 type Builder struct {
 	binaryName string
+	workingDir string
 }
 
 func NewBuilder(name string) *Builder {
-	return &Builder{binaryName: name}
+	wd, err := os.Getwd()
+	if err != nil {
+		log.Printf("Warning: Could not get working directory: %v", err)
+		wd = "."
+	}
+	return &Builder{
+		binaryName: name,
+		workingDir: wd,
+	}
 }
 
 // isLinux checks if we're running on Linux
@@ -162,7 +209,11 @@ func (b *Builder) build() error {
 	goBin := getGoBinary()
 	log.Printf("Using Go binary: %s", goBin)
 
-	cmd := exec.Command(goBin, "build", "-o", b.binaryName)
+	// Use absolute path for output binary
+	outputPath := filepath.Join(b.workingDir, b.binaryName)
+	log.Printf("Building to: %s", outputPath)
+
+	cmd := exec.Command(goBin, "build", "-o", outputPath)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
@@ -170,7 +221,8 @@ func (b *Builder) build() error {
 
 func (b *Builder) setPermissions() error {
 	log.Println("Setting binary permissions...")
-	return os.Chmod(b.binaryName, 0755)
+	outputPath := filepath.Join(b.workingDir, b.binaryName)
+	return os.Chmod(outputPath, 0755)
 }
 
 // RebuildResult contains the result of the rebuild operation
@@ -237,6 +289,9 @@ func ExecuteRebuild() RebuildResult {
 		}
 
 		log.Println("Service stopped successfully, attempting restart...")
+
+		// Force a small delay to ensure the system is ready
+		time.Sleep(1 * time.Second)
 
 		// Try restart first
 		if err := sm.restart(); err != nil {
