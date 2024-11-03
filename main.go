@@ -9,10 +9,10 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"runtime"
 	"sync"
+
+	"media_optimizer/pkg/rebuild"
 
 	"github.com/gorilla/websocket"
 )
@@ -30,6 +30,12 @@ type OptimizationJob struct {
 	SourcePath string `json:"sourcePath"`
 	Status     string `json:"status"`
 	Progress   int    `json:"progress"`
+}
+
+type RebuildResponse struct {
+	Status  string `json:"status"`
+	Message string `json:"message"`
+	Error   string `json:"error,omitempty"`
 }
 
 var (
@@ -106,29 +112,26 @@ func handleRebuild(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var cmd *exec.Cmd
-	if runtime.GOOS == "windows" {
-		cmd = exec.Command("cmd", "/C", "rebuild.bat")
-	} else {
-		// Make the shell script executable
-		if err := os.Chmod("rebuild.sh", 0755); err != nil {
-			http.Error(w, fmt.Sprintf("Failed to make rebuild script executable: %v", err), http.StatusInternalServerError)
-			return
-		}
-		cmd = exec.Command("./rebuild.sh")
-	}
-
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		http.Error(w, fmt.Sprintf("Rebuild failed: %v\n%s", err, string(output)), http.StatusInternalServerError)
-		return
-	}
-
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{
-		"status":  "success",
-		"message": "Rebuild completed successfully. Server will restart.",
-	})
+
+	// Execute the rebuild process asynchronously
+	go func() {
+		result := rebuild.ExecuteRebuild()
+
+		if !result.Success {
+			log.Printf("Rebuild failed: %v", result.Error)
+		} else {
+			log.Printf("Rebuild completed: %s", result.Message)
+		}
+	}()
+
+	// Return immediate response
+	response := RebuildResponse{
+		Status:  "initiated",
+		Message: "Rebuild process has been initiated. Check logs for progress.",
+	}
+
+	json.NewEncoder(w).Encode(response)
 }
 
 func handleBrowse(w http.ResponseWriter, r *http.Request) {
