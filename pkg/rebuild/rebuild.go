@@ -12,6 +12,8 @@ import (
 const (
 	ServiceName = "media-optimizer.service"
 	BinaryName  = "media-optimizer"
+	// Add Linux Go binary path
+	LinuxGoBinary = "/usr/local/go/bin/go"
 )
 
 // ServiceManager handles service operations
@@ -99,7 +101,21 @@ func NewBuilder(name string) *Builder {
 
 func (b *Builder) build() error {
 	log.Println("Building binary...")
-	cmd := exec.Command("go", "build", "-o", b.binaryName)
+
+	var cmd *exec.Cmd
+	if os.Getenv("GOOS") == "linux" {
+		// Check if the Go binary exists at the Linux path
+		if _, err := os.Stat(LinuxGoBinary); err == nil {
+			cmd = exec.Command(LinuxGoBinary, "build", "-o", b.binaryName)
+		} else {
+			// Fallback to PATH-based go command
+			cmd = exec.Command("go", "build", "-o", b.binaryName)
+		}
+	} else {
+		// On Windows or other systems, use PATH-based go command
+		cmd = exec.Command("go", "build", "-o", b.binaryName)
+	}
+
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
