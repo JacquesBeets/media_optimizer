@@ -5,6 +5,14 @@ set -e
 
 echo "Starting rebuild process..."
 
+# Function to check service status
+check_service_status() {
+    echo "Checking service status..."
+    sudo systemctl status media-optimizer.service || true
+    echo "Recent service logs:"
+    sudo journalctl -u media-optimizer.service -n 50 --no-pager || true
+}
+
 # Pull latest changes
 echo "Pulling latest changes..."
 if ! git pull; then
@@ -12,10 +20,22 @@ if ! git pull; then
     exit 1
 fi
 
+# Check initial service status
+echo "Initial service state:"
+check_service_status
+
 # Stop service with sudo
 echo "Stopping media-optimizer service..."
 if ! sudo systemctl stop media-optimizer.service; then
     echo "Failed to stop service"
+    check_service_status
+    exit 1
+fi
+
+echo "Service stop command completed, verifying service is stopped..."
+if sudo systemctl is-active media-optimizer.service; then
+    echo "ERROR: Service is still running after stop command"
+    check_service_status
     exit 1
 fi
 
@@ -38,10 +58,21 @@ fi
 echo "Starting media-optimizer service..."
 if ! sudo systemctl start media-optimizer.service; then
     echo "Failed to start service"
+    check_service_status
+    exit 1
+fi
+
+# Verify service is running
+echo "Verifying service started successfully..."
+sleep 2  # Give the service a moment to start up
+if ! sudo systemctl is-active media-optimizer.service; then
+    echo "ERROR: Service failed to start"
+    check_service_status
     exit 1
 fi
 
 echo "Rebuild completed successfully"
 
-# Check service status
-sudo systemctl status media-optimizer.service
+# Final status check
+echo "Final service state:"
+check_service_status
