@@ -178,15 +178,27 @@
             ws.onclose = function() {
                 // Only attempt to reconnect if we're showing the rebuild modal
                 if (document.getElementById('rebuildModal').style.display === 'flex') {
+                    clearInterval(reconnectInterval); // Clear any existing interval
+                    reconnectInterval = null;
                     attemptReconnect();
                 }
             };
         }
 
+        function stopReconnecting() {
+            if (reconnectInterval) {
+                clearInterval(reconnectInterval);
+                reconnectInterval = null;
+            }
+            reconnectAttempts = 0;
+            document.getElementById('rebuildModal').style.display = 'none';
+            document.getElementById('rebuildBtn').disabled = false;
+        }
+
         function attemptReconnect() {
             if (reconnectAttempts >= maxReconnectAttempts) {
+                stopReconnecting();
                 alert('Server reconnection failed. Please refresh the page manually.');
-                document.getElementById('rebuildModal').style.display = 'none';
                 return;
             }
 
@@ -194,6 +206,7 @@
             fetch('/')
                 .then(response => {
                     if (response.ok) {
+                        stopReconnecting();
                         window.location.reload();
                     } else {
                         throw new Error('Server not ready');
@@ -313,8 +326,7 @@
             } catch (error) {
                 console.error('Error during rebuild:', error);
                 alert('Error during rebuild: ' + error.message);
-                document.getElementById('rebuildModal').style.display = 'none';
-                rebuildBtn.disabled = false;
+                stopReconnecting();
             }
         }
 
