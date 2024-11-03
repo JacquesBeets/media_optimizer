@@ -59,52 +59,57 @@ func (sm *ServiceManager) getStatus() (string, error) {
 
 func (sm *ServiceManager) stop() error {
 	log.Printf("Stopping %s...", sm.serviceName)
-	return sm.execSystemCtl("stop", sm.serviceName)
+
+	// Force stop the service
+	if err := sm.execSystemCtl("stop", "--force", sm.serviceName); err != nil {
+		log.Printf("Warning: Force stop failed: %v", err)
+	}
+
+	// Kill any remaining processes
+	if err := exec.Command("pkill", "-f", BinaryName).Run(); err != nil {
+		log.Printf("Warning: pkill failed: %v", err)
+	}
+
+	return nil
+}
+
+func (sm *ServiceManager) reloadDaemon() error {
+	log.Println("Reloading systemd daemon...")
+	return sm.execSystemCtl("daemon-reload")
+}
+
+func (sm *ServiceManager) resetFailed() error {
+	log.Println("Resetting failed state...")
+	return sm.execSystemCtl("reset-failed", sm.serviceName)
 }
 
 func (sm *ServiceManager) start() error {
 	log.Printf("Starting %s...", sm.serviceName)
 
-	// Force a daemon-reload first
-	if err := sm.execSystemCtl("daemon-reload"); err != nil {
-		log.Printf("Warning: daemon-reload failed: %v", err)
+	// Reset any failed state
+	if err := sm.resetFailed(); err != nil {
+		log.Printf("Warning: reset-failed error: %v", err)
 	}
 
+	// Reload daemon
+	if err := sm.reloadDaemon(); err != nil {
+		log.Printf("Warning: daemon-reload error: %v", err)
+	}
+
+	// Try to start the service
 	if err := sm.execSystemCtl("start", sm.serviceName); err != nil {
-		// If start fails, try to get more information
+		// Get detailed status
 		cmd := exec.Command("systemctl", "status", sm.serviceName)
 		output, _ := cmd.CombinedOutput()
 		log.Printf("Service status after failed start:\n%s", string(output))
 
-		// Also check journal logs
+		// Get journal logs
 		cmd = exec.Command("journalctl", "-u", sm.serviceName, "-n", "50", "--no-pager")
 		output, _ = cmd.CombinedOutput()
 		log.Printf("Recent service logs:\n%s", string(output))
 		return err
 	}
-	return nil
-}
 
-func (sm *ServiceManager) restart() error {
-	log.Printf("Restarting %s...", sm.serviceName)
-
-	// Force a daemon-reload first
-	if err := sm.execSystemCtl("daemon-reload"); err != nil {
-		log.Printf("Warning: daemon-reload failed: %v", err)
-	}
-
-	if err := sm.execSystemCtl("restart", sm.serviceName); err != nil {
-		// If restart fails, try to get more information
-		cmd := exec.Command("systemctl", "status", sm.serviceName)
-		output, _ := cmd.CombinedOutput()
-		log.Printf("Service status after failed restart:\n%s", string(output))
-
-		// Also check journal logs
-		cmd = exec.Command("journalctl", "-u", sm.serviceName, "-n", "50", "--no-pager")
-		output, _ = cmd.CombinedOutput()
-		log.Printf("Recent service logs:\n%s", string(output))
-		return err
-	}
 	return nil
 }
 
@@ -118,7 +123,7 @@ func (sm *ServiceManager) waitForStatus(expectedStatus string, timeout time.Dura
 			output, _ := cmd.CombinedOutput()
 			log.Printf("Service status on timeout:\n%s", string(output))
 
-			// Also check journal logs
+			// Get journal logs
 			cmd = exec.Command("journalctl", "-u", sm.serviceName, "-n", "50", "--no-pager")
 			output, _ = cmd.CombinedOutput()
 			log.Printf("Recent service logs:\n%s", string(output))
@@ -288,20 +293,25 @@ func ExecuteRebuild() RebuildResult {
 			return result
 		}
 
-		log.Println("Service stopped successfully, attempting restart...")
+		log.Println("Service stopped successfully, preparing for restart...")
 
 		// Force a small delay to ensure the system is ready
-		time.Sleep(1 * time.Second)
+		time.Sleep(2 * time.Second)
 
-		// Try restart first
-		if err := sm.restart(); err != nil {
-			log.Printf("Restart failed, attempting explicit start: %v", err)
-			// If restart fails, try explicit start
-			if err := sm.start(); err != nil {
-				result.Error = fmt.Errorf("failed to start service: %v", err)
-				result.Message = "Failed to start service"
-				return result
-			}
+		// Reset failed state and reload daemon
+		if err := sm.resetFailed(); err != nil {
+			log.Printf("Warning: Failed to reset failed state: %v", err)
+		}
+
+		if err := sm.reloadDaemon(); err != nil {
+			log.Printf("Warning: Failed to reload daemon: %v", err)
+		}
+
+		// Start the service
+		if err := sm.start(); err != nil {
+			result.Error = fmt.Errorf("failed to start service: %v", err)
+			result.Message = "Failed to start service"
+			return result
 		}
 
 		// Wait for service to start
