@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"runtime"
 	"strings"
 	"time"
 )
@@ -99,23 +100,40 @@ func NewBuilder(name string) *Builder {
 	return &Builder{binaryName: name}
 }
 
+// isLinux checks if we're running on Linux
+func isLinux() bool {
+	return runtime.GOOS == "linux"
+}
+
+// getGoBinary returns the appropriate go binary path
+func getGoBinary() string {
+	if isLinux() {
+		// Try the full path first
+		if _, err := os.Stat(LinuxGoBinary); err == nil {
+			return LinuxGoBinary
+		}
+		// Try common Linux paths
+		commonPaths := []string{
+			"/usr/bin/go",
+			"/usr/local/bin/go",
+			"/home/linuxbrew/.linuxbrew/bin/go",
+		}
+		for _, path := range commonPaths {
+			if _, err := os.Stat(path); err == nil {
+				return path
+			}
+		}
+	}
+	return "go" // fallback to PATH-based lookup
+}
+
 func (b *Builder) build() error {
 	log.Println("Building binary...")
 
-	var cmd *exec.Cmd
-	if os.Getenv("GOOS") == "linux" {
-		// Check if the Go binary exists at the Linux path
-		if _, err := os.Stat(LinuxGoBinary); err == nil {
-			cmd = exec.Command(LinuxGoBinary, "build", "-o", b.binaryName)
-		} else {
-			// Fallback to PATH-based go command
-			cmd = exec.Command("go", "build", "-o", b.binaryName)
-		}
-	} else {
-		// On Windows or other systems, use PATH-based go command
-		cmd = exec.Command("go", "build", "-o", b.binaryName)
-	}
+	goBin := getGoBinary()
+	log.Printf("Using Go binary: %s", goBin)
 
+	cmd := exec.Command(goBin, "build", "-o", b.binaryName)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
@@ -172,7 +190,7 @@ func ExecuteRebuild() RebuildResult {
 	}
 
 	// If we're on Linux, handle the service
-	if os.Getenv("GOOS") == "linux" {
+	if isLinux() {
 		sm := NewServiceManager(ServiceName)
 
 		// Stop service
