@@ -32,12 +32,22 @@ type OptimizationJob struct {
 	Status     string `json:"status"`
 	Progress   int    `json:"progress"`
 	Error      string `json:"error,omitempty"`
+	WSConn     *websocket.Conn
 }
 
 type RebuildResponse struct {
 	Status  string `json:"status"`
 	Message string `json:"message"`
 	Error   string `json:"error,omitempty"`
+}
+
+type WSMessage struct {
+	Type     string      `json:"type"`
+	JobID    string      `json:"jobId"`
+	Status   string      `json:"status,omitempty"`
+	Progress float64     `json:"progress,omitempty"`
+	Error    string      `json:"error,omitempty"`
+	Data     interface{} `json:"data,omitempty"`
 }
 
 var (
@@ -57,13 +67,11 @@ var (
 )
 
 func main() {
-	// Create static file server
 	staticContent, err := fs.Sub(staticFiles, "static")
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	// Setup routes
 	http.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.FS(staticContent))))
 	http.HandleFunc("/", handleHome)
 	http.HandleFunc("/ws", handleWebSocket)
@@ -71,7 +79,6 @@ func main() {
 	http.HandleFunc("/api/optimize", handleOptimize)
 	http.HandleFunc("/api/rebuild", handleRebuild)
 
-	// Start server
 	port := 8080
 	log.Printf("Server starting on port %d...\n", port)
 	if err := http.ListenAndServe(fmt.Sprintf(":%d", port), nil); err != nil {
@@ -92,19 +99,33 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	}
 	defer conn.Close()
 
-	// WebSocket message handling loop
+	// Handle incoming messages
 	for {
-		messageType, message, err := conn.ReadMessage()
+		_, _, err := conn.ReadMessage()
 		if err != nil {
-			log.Printf("WebSocket read error: %v", err)
+			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
+				log.Printf("WebSocket error: %v", err)
+			}
 			break
 		}
+	}
+}
 
-		// Echo the message back for now
-		if err := conn.WriteMessage(messageType, message); err != nil {
-			log.Printf("WebSocket write error: %v", err)
-			break
-		}
+func sendWSUpdate(job *OptimizationJob, msgType string, progress float64) {
+	if job.WSConn == nil {
+		return
+	}
+
+	msg := WSMessage{
+		Type:     msgType,
+		JobID:    job.SourcePath,
+		Status:   job.Status,
+		Progress: progress,
+		Error:    job.Error,
+	}
+
+	if err := job.WSConn.WriteJSON(msg); err != nil {
+		log.Printf("WebSocket write error: %v", err)
 	}
 }
 
@@ -116,7 +137,6 @@ func handleRebuild(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 
-	// Execute the rebuild process asynchronously
 	go func() {
 		result := rebuild.ExecuteRebuild()
 
@@ -127,7 +147,6 @@ func handleRebuild(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 
-	// Return immediate response
 	response := RebuildResponse{
 		Status:  "initiated",
 		Message: "Rebuild process has been initiated. Check logs for progress.",
@@ -150,7 +169,6 @@ func handleBrowse(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// If no path provided, start from root
 	if request.Path == "" {
 		request.Path = "/"
 	}
@@ -179,11 +197,19 @@ func handleOptimize(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Upgrade to WebSocket connection
+	conn, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		http.Error(w, "WebSocket upgrade failed", http.StatusInternalServerError)
+		return
+	}
+
 	// Create new optimization job
 	job := &OptimizationJob{
 		SourcePath: request.Path,
 		Status:     "queued",
 		Progress:   0,
+		WSConn:     conn,
 	}
 
 	// Store job
@@ -194,11 +220,8 @@ func handleOptimize(w http.ResponseWriter, r *http.Request) {
 	// Start optimization in background
 	go optimizeMedia(job)
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{
-		"status": "optimization started",
-		"path":   request.Path,
-	})
+	// Initial status update
+	sendWSUpdate(job, "status", 0)
 }
 
 func listFiles(path string) ([]FileInfo, error) {
@@ -222,13 +245,26 @@ func listFiles(path string) ([]FileInfo, error) {
 }
 
 func optimizeMedia(job *OptimizationJob) {
+	defer func() {
+		if job.WSConn != nil {
+			job.WSConn.Close()
+		}
+	}()
+
 	// Update job status
 	activeJobs.Lock()
 	job.Status = "processing"
 	activeJobs.Unlock()
+	sendWSUpdate(job, "status", 0)
 
-	// Create optimization parameters with default settings
+	// Create optimization parameters with progress callback
 	params := mediaopt.NewDefaultAudioParams(job.SourcePath)
+	params.OnProgress = func(progress float64) {
+		activeJobs.Lock()
+		job.Progress = int(progress)
+		activeJobs.Unlock()
+		sendWSUpdate(job, "progress", progress)
+	}
 
 	// Perform optimization
 	result := mediaopt.OptimizeAudio(params)
@@ -243,6 +279,9 @@ func optimizeMedia(job *OptimizationJob) {
 		job.Error = result.Error.Error()
 	}
 	activeJobs.Unlock()
+
+	// Final status update
+	sendWSUpdate(job, "status", float64(job.Progress))
 
 	// Log the result
 	if result.Success {

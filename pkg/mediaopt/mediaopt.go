@@ -1,10 +1,15 @@
 package mediaopt
 
 import (
+	"bufio"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
+	"strconv"
+	"strings"
 )
 
 type OptimizationResult struct {
@@ -13,19 +18,20 @@ type OptimizationResult struct {
 	Error   error
 }
 
+type ProgressCallback func(float64)
+
 // AudioOptimizationParams contains parameters for audio optimization
 type AudioOptimizationParams struct {
-	InputFile  string
-	OutputFile string
-	// Audio specific parameters
-	CompressThreshold float64 // dB threshold for compression
-	CompressRatio     float64 // compression ratio
-	DialogBoost       float64 // dB boost for dialog frequencies
+	InputFile         string
+	OutputFile        string
+	CompressThreshold float64
+	CompressRatio     float64
+	DialogBoost       float64
+	OnProgress        ProgressCallback
 }
 
 // NewDefaultAudioParams creates default audio optimization parameters
 func NewDefaultAudioParams(inputFile string) *AudioOptimizationParams {
-	// Create output filename with _optimized suffix
 	ext := filepath.Ext(inputFile)
 	base := inputFile[:len(inputFile)-len(ext)]
 	outputFile := base + "_optimized" + ext
@@ -33,15 +39,49 @@ func NewDefaultAudioParams(inputFile string) *AudioOptimizationParams {
 	return &AudioOptimizationParams{
 		InputFile:         inputFile,
 		OutputFile:        outputFile,
-		CompressThreshold: -20, // Start compression at -20dB
-		CompressRatio:     3,   // 3:1 compression ratio
-		DialogBoost:       2,   // 2dB boost for dialog frequencies
+		CompressThreshold: -20,
+		CompressRatio:     3,
+		DialogBoost:       2,
 	}
+}
+
+// getDuration gets the duration of the input file in seconds
+func getDuration(inputFile string) (float64, error) {
+	cmd := exec.Command("ffprobe",
+		"-v", "error",
+		"-show_entries", "format=duration",
+		"-of", "default=noprint_wrappers=1:nokey=1",
+		inputFile)
+
+	output, err := cmd.Output()
+	if err != nil {
+		return 0, err
+	}
+
+	duration, err := strconv.ParseFloat(strings.TrimSpace(string(output)), 64)
+	if err != nil {
+		return 0, err
+	}
+
+	return duration, nil
+}
+
+// parseProgress parses FFmpeg progress output
+func parseProgress(line string, duration float64) float64 {
+	if strings.HasPrefix(line, "out_time_ms=") {
+		timeStr := strings.TrimPrefix(line, "out_time_ms=")
+		timeMs, err := strconv.ParseInt(timeStr, 10, 64)
+		if err != nil {
+			return 0
+		}
+		timeSec := float64(timeMs) / 1000000.0
+		return (timeSec / duration) * 100
+	}
+	return -1
 }
 
 // OptimizeAudio processes the audio for better dialog clarity on 2.1 systems
 func OptimizeAudio(params *AudioOptimizationParams) OptimizationResult {
-	// Verify input file exists
 	if _, err := os.Stat(params.InputFile); os.IsNotExist(err) {
 		return OptimizationResult{
 			Success: false,
@@ -49,35 +89,105 @@ func OptimizeAudio(params *AudioOptimizationParams) OptimizationResult {
 		}
 	}
 
+	// Get video duration for progress calculation
+	duration, err := getDuration(params.InputFile)
+	if err != nil {
+		return OptimizationResult{
+			Success: false,
+			Error:   fmt.Errorf("failed to get video duration: %v", err),
+		}
+	}
+
+	// Create progress file
+	progressFile, err := os.CreateTemp("", "ffmpeg-progress-*")
+	if err != nil {
+		return OptimizationResult{
+			Success: false,
+			Error:   fmt.Errorf("failed to create progress file: %v", err),
+		}
+	}
+	defer os.Remove(progressFile.Name())
+	defer progressFile.Close()
+
 	// Construct FFmpeg filter chain
 	filterComplex := fmt.Sprintf(
-		// Normalize audio first
 		"loudnorm=I=-16:TP=-1.5:LRA=11,"+
-			// Apply multiband compression focusing on dialog frequencies
 			"compand=attacks=0.05:decays=1:points=-90/-90|-70/-70|-60/-60|%f/%f:gain=2,"+
-			// Boost dialog frequencies (1-4kHz)
 			"equalizer=f=2000:t=h:w=1:g=%f,"+
-			// Final limiter to prevent clipping
 			"alimiter=level_in=1:level_out=1:limit=1:attack=5:release=50",
 		params.CompressThreshold, params.CompressRatio, params.DialogBoost,
 	)
 
-	// Construct FFmpeg command
+	// Calculate optimal thread count (use all available cores)
+	threads := runtime.NumCPU()
+
+	// Construct FFmpeg command with thread optimization
 	cmd := exec.Command("ffmpeg",
 		"-i", params.InputFile,
-		"-c:v", "copy", // Copy video stream without re-encoding
+		"-threads", fmt.Sprintf("%d", threads),
+		"-c:v", "copy",
 		"-af", filterComplex,
-		"-c:a", "aac", // Use AAC codec for audio
-		"-b:a", "192k", // Set audio bitrate
-		"-y", // Overwrite output file if exists
+		"-c:a", "aac",
+		"-b:a", "192k",
+		"-progress", progressFile.Name(),
+		"-y",
 		params.OutputFile,
 	)
 
-	// Execute FFmpeg command
-	if output, err := cmd.CombinedOutput(); err != nil {
+	// Create pipe for stderr to capture FFmpeg output
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
 		return OptimizationResult{
 			Success: false,
-			Error:   fmt.Errorf("FFmpeg error: %v\nOutput: %s", err, string(output)),
+			Error:   fmt.Errorf("failed to create stderr pipe: %v", err),
+		}
+	}
+
+	// Start command
+	if err := cmd.Start(); err != nil {
+		return OptimizationResult{
+			Success: false,
+			Error:   fmt.Errorf("failed to start FFmpeg: %v", err),
+		}
+	}
+
+	// Monitor progress file
+	go func() {
+		progressFile.Seek(0, 0)
+		reader := bufio.NewReader(progressFile)
+		for {
+			line, err := reader.ReadString('\n')
+			if err == io.EOF {
+				if cmd.ProcessState != nil && cmd.ProcessState.Exited() {
+					break
+				}
+				continue
+			}
+			if err != nil {
+				break
+			}
+
+			progress := parseProgress(strings.TrimSpace(line), duration)
+			if progress >= 0 && params.OnProgress != nil {
+				params.OnProgress(progress)
+			}
+		}
+	}()
+
+	// Capture stderr output
+	go func() {
+		scanner := bufio.NewScanner(stderr)
+		for scanner.Scan() {
+			// Log FFmpeg output for debugging
+			fmt.Println("FFmpeg:", scanner.Text())
+		}
+	}()
+
+	// Wait for completion
+	if err := cmd.Wait(); err != nil {
+		return OptimizationResult{
+			Success: false,
+			Error:   fmt.Errorf("FFmpeg processing failed: %v", err),
 		}
 	}
 
