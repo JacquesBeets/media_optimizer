@@ -1,41 +1,30 @@
 #!/bin/bash
 
-# Exit on any error
-set -e
-
 echo "Starting rebuild process..."
 
-# Function to check service status with error capture
-check_service_status() {
-    echo "Checking service status..."
-    sudo systemctl status media-optimizer.service 2>&1 || true
+# Enable systemd debug shell
+sudo systemctl enable debug-shell.service || true
+
+# Function to get detailed logs
+get_detailed_logs() {
+    echo "=== Journal Logs ==="
+    sudo journalctl -u media-optimizer.service -n 50 --no-pager
+    
+    echo -e "\n=== Systemd Debug Logs ==="
+    sudo systemctl status media-optimizer.service -l --no-pager
+    
+    echo -e "\n=== System Journal ==="
+    sudo journalctl -xn 50 --no-pager
+    
+    echo -e "\n=== Process Status ==="
+    ps aux | grep media-optimizer
+    
+    echo -e "\n=== System Load ==="
+    uptime
+    
+    echo -e "\n=== Service Properties ==="
+    sudo systemctl show media-optimizer.service
 }
-
-# Verify service file exists
-if [ ! -f "/etc/systemd/system/media-optimizer.service" ]; then
-    echo "ERROR: Service file missing. Creating default service file..."
-    # Create service file if missing
-    sudo tee /etc/systemd/system/media-optimizer.service > /dev/null << EOL
-[Unit]
-Description=Media Optimizer Server
-After=network.target
-
-[Service]
-Type=simple
-User=root
-WorkingDirectory=/root/media-optimizer
-ExecStart=/root/media-optimizer/media-optimizer
-Restart=always
-RestartSec=3
-
-[Install]
-WantedBy=multi-user.target
-EOL
-fi
-
-# Show current service file
-echo "Current service file contents:"
-sudo cat /etc/systemd/system/media-optimizer.service
 
 # Pull latest changes
 echo "Pulling latest changes..."
@@ -44,53 +33,56 @@ if ! git pull; then
     exit 1
 fi
 
-# Stop service and wait
+# Get initial state
+echo "Initial state:"
+get_detailed_logs
+
+# Stop service
 echo "Stopping service..."
 sudo systemctl stop media-optimizer.service || true
-echo "Waiting for service to fully stop..."
-sleep 3
+sleep 2
 
-# Build the binary with proper Linux output name
-echo "Building binary..."
-if ! GOOS=linux go build -o media-optimizer; then
+echo "State after stop:"
+get_detailed_logs
+
+# Build with debug symbols
+echo "Building binary with debug info..."
+if ! GOOS=linux go build -gcflags="all=-N -l" -o media-optimizer; then
     echo "Failed to build binary"
     exit 1
 fi
 
-# Ensure proper permissions
-echo "Setting binary permissions..."
+# Set permissions
+echo "Setting permissions..."
 sudo chmod 755 media-optimizer
 
-# Restart systemd itself
-echo "Restarting systemd daemon..."
-sudo systemctl daemon-reload
+# Start service with debug logging
+echo "Starting service with debug logging..."
+sudo bash -c 'SYSTEMD_LOG_LEVEL=debug systemctl start media-optimizer.service'
+sleep 2
 
-# Enable service if not enabled
-echo "Enabling service..."
-sudo systemctl enable media-optimizer.service || true
+echo "State after start attempt:"
+get_detailed_logs
 
-# Start service with status check
-echo "Starting service..."
-if ! sudo systemctl start media-optimizer.service; then
-    echo "Failed to start service. Checking status..."
-    check_service_status
-    echo "Checking logs..."
-    sudo journalctl -u media-optimizer.service -n 50 --no-pager --since "10 seconds ago"
-    echo "Trying direct execution for debugging..."
-    sudo ./media-optimizer
-    exit 1
-fi
+# Check specific failure conditions
+echo "Checking specific failure conditions..."
+echo "1. Binary existence and permissions:"
+ls -l media-optimizer
 
-# Verify service is enabled and running
-echo "Verifying service state..."
-sudo systemctl is-enabled media-optimizer.service
-sudo systemctl is-active media-optimizer.service
+echo "2. Service file contents:"
+sudo cat /etc/systemd/system/media-optimizer.service
 
-# Show running processes
-echo "Process information:"
-ps aux | grep media-optimizer
+echo "3. System journal errors:"
+sudo journalctl -p err -n 50 --no-pager
 
-echo "Rebuild completed successfully"
+echo "4. Systemd status:"
+sudo systemctl status media-optimizer.service -l --no-pager
 
-# Final status
-check_service_status
+echo "5. Port availability:"
+sudo netstat -tulpn | grep 8080
+
+echo "6. System resources:"
+free -m
+df -h
+
+echo "Rebuild process completed"
