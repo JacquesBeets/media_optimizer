@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sync"
 
 	"github.com/gorilla/websocket"
@@ -105,8 +106,18 @@ func handleRebuild(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Execute the rebuild script
-	cmd := exec.Command("cmd", "/C", "rebuild.bat")
+	var cmd *exec.Cmd
+	if runtime.GOOS == "windows" {
+		cmd = exec.Command("cmd", "/C", "rebuild.bat")
+	} else {
+		// Make the shell script executable
+		if err := os.Chmod("rebuild.sh", 0755); err != nil {
+			http.Error(w, fmt.Sprintf("Failed to make rebuild script executable: %v", err), http.StatusInternalServerError)
+			return
+		}
+		cmd = exec.Command("./rebuild.sh")
+	}
+
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Rebuild failed: %v\n%s", err, string(output)), http.StatusInternalServerError)
