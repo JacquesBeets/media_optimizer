@@ -30,7 +30,11 @@ func (sm *ServiceManager) execSystemCtl(args ...string) error {
 	cmd := exec.Command("systemctl", args...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	return cmd.Run()
+	if err := cmd.Run(); err != nil {
+		log.Printf("systemctl %s failed: %v", strings.Join(args, " "), err)
+		return err
+	}
+	return nil
 }
 
 func (sm *ServiceManager) getStatus() (string, error) {
@@ -49,18 +53,43 @@ func (sm *ServiceManager) stop() error {
 
 func (sm *ServiceManager) start() error {
 	log.Printf("Starting %s...", sm.serviceName)
-	return sm.execSystemCtl("start", sm.serviceName)
+	if err := sm.execSystemCtl("start", sm.serviceName); err != nil {
+		// If start fails, try to get more information
+		cmd := exec.Command("systemctl", "status", sm.serviceName)
+		output, _ := cmd.CombinedOutput()
+		log.Printf("Service status after failed start:\n%s", string(output))
+		return err
+	}
+	return nil
+}
+
+func (sm *ServiceManager) restart() error {
+	log.Printf("Restarting %s...", sm.serviceName)
+	if err := sm.execSystemCtl("restart", sm.serviceName); err != nil {
+		// If restart fails, try to get more information
+		cmd := exec.Command("systemctl", "status", sm.serviceName)
+		output, _ := cmd.CombinedOutput()
+		log.Printf("Service status after failed restart:\n%s", string(output))
+		return err
+	}
+	return nil
 }
 
 func (sm *ServiceManager) waitForStatus(expectedStatus string, timeout time.Duration) error {
+	log.Printf("Waiting for service status: %s", expectedStatus)
 	start := time.Now()
 	for {
 		if time.Since(start) > timeout {
+			// Get detailed status on timeout
+			cmd := exec.Command("systemctl", "status", sm.serviceName)
+			output, _ := cmd.CombinedOutput()
+			log.Printf("Service status on timeout:\n%s", string(output))
 			return fmt.Errorf("timeout waiting for service status: %s", expectedStatus)
 		}
 
 		status, err := sm.getStatus()
 		if err == nil && status == expectedStatus {
+			log.Printf("Service reached expected status: %s", expectedStatus)
 			return nil
 		}
 
@@ -207,11 +236,17 @@ func ExecuteRebuild() RebuildResult {
 			return result
 		}
 
-		// Start service
-		if err := sm.start(); err != nil {
-			result.Error = fmt.Errorf("failed to start service: %v", err)
-			result.Message = "Failed to start service"
-			return result
+		log.Println("Service stopped successfully, attempting restart...")
+
+		// Try restart first
+		if err := sm.restart(); err != nil {
+			log.Printf("Restart failed, attempting explicit start: %v", err)
+			// If restart fails, try explicit start
+			if err := sm.start(); err != nil {
+				result.Error = fmt.Errorf("failed to start service: %v", err)
+				result.Message = "Failed to start service"
+				return result
+			}
 		}
 
 		// Wait for service to start
@@ -220,6 +255,8 @@ func ExecuteRebuild() RebuildResult {
 			result.Message = "Service failed to start"
 			return result
 		}
+
+		log.Println("Service successfully restarted and active")
 	}
 
 	result.Success = true
