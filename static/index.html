@@ -7,69 +7,51 @@
     <style>
         body {
             font-family: Arial, sans-serif;
-            margin: 0;
+            max-width: 800px;
+            margin: 0 auto;
             padding: 20px;
-            background-color: #f0f2f5;
+            background-color: #f0f0f0;
         }
         .container {
-            max-width: 1200px;
-            margin: 0 auto;
             background-color: white;
             padding: 20px;
-            border-radius: 8px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-        }
-        .header {
-            margin-bottom: 20px;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
+            border-radius: 5px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
         }
         .file-browser {
-            border: 1px solid #ddd;
-            border-radius: 4px;
-            padding: 10px;
             margin-bottom: 20px;
         }
         .file-list {
             list-style: none;
             padding: 0;
-            margin: 0;
         }
         .file-item {
-            padding: 8px;
-            cursor: pointer;
-            display: flex;
-            align-items: center;
+            padding: 10px;
             border-bottom: 1px solid #eee;
+            cursor: pointer;
         }
         .file-item:hover {
             background-color: #f5f5f5;
         }
-        .file-item.selected {
-            background-color: #e3f2fd;
+        .directory {
+            color: #2c3e50;
+            font-weight: bold;
         }
-        .file-icon {
-            margin-right: 10px;
+        .file {
+            color: #34495e;
         }
-        .actions {
-            margin-top: 20px;
-        }
-        .button {
-            background-color: #1976d2;
-            color: white;
-            border: none;
-            padding: 10px 20px;
+        .breadcrumb {
+            margin-bottom: 10px;
+            padding: 10px;
+            background-color: #f8f9fa;
             border-radius: 4px;
+        }
+        .breadcrumb span {
             cursor: pointer;
-            margin-right: 10px;
+            color: #007bff;
         }
-        .button.rebuild {
-            background-color: #4caf50;
-        }
-        .button:disabled {
-            background-color: #ccc;
-            cursor: not-allowed;
+        .breadcrumb span:hover {
+            text-decoration: underline;
         }
         .progress-container {
             margin-top: 20px;
@@ -85,151 +67,100 @@
         .progress {
             width: 0%;
             height: 100%;
-            background-color: #4caf50;
-            transition: width 0.3s ease;
+            background-color: #4CAF50;
+            transition: width 0.3s ease-in-out;
         }
         .status {
             margin-top: 10px;
-            font-size: 14px;
-            color: #666;
+            font-weight: bold;
         }
-        .modal {
+        .error {
+            color: #dc3545;
+            margin-top: 10px;
             display: none;
-            position: fixed;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            background-color: rgba(0,0,0,0.5);
-            align-items: center;
-            justify-content: center;
         }
-        .modal-content {
-            background-color: white;
-            padding: 20px;
-            border-radius: 8px;
-            text-align: center;
+        .rebuild-button {
+            margin-top: 20px;
+            padding: 10px 20px;
+            background-color: #007bff;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
         }
-        .spinner {
-            border: 4px solid #f3f3f3;
-            border-top: 4px solid #4caf50;
-            border-radius: 50%;
-            width: 40px;
-            height: 40px;
-            animation: spin 1s linear infinite;
-            margin: 20px auto;
-        }
-        @keyframes spin {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
+        .rebuild-button:hover {
+            background-color: #0056b3;
         }
     </style>
 </head>
 <body>
     <div class="container">
-        <div class="header">
-            <div>
-                <h1>Media Optimizer</h1>
-                <p>Optimize your media files for better storage and sound quality</p>
-            </div>
-            <button id="rebuildBtn" class="button rebuild">Update & Rebuild</button>
-        </div>
-
+        <h1>Media Optimizer</h1>
+        
         <div class="file-browser">
-            <div class="current-path"></div>
-            <ul class="file-list"></ul>
+            <div class="breadcrumb" id="breadcrumb"></div>
+            <ul class="file-list" id="fileList"></ul>
         </div>
 
-        <div class="actions">
-            <button id="optimizeBtn" class="button" disabled>Optimize Selected</button>
-        </div>
-
-        <div class="progress-container">
+        <div class="progress-container" id="progressContainer">
             <div class="progress-bar">
-                <div class="progress"></div>
+                <div class="progress" id="progress"></div>
             </div>
-            <div class="status">Ready to optimize...</div>
+            <div class="status" id="status">Status: Initializing...</div>
+            <div class="error" id="error"></div>
         </div>
-    </div>
 
-    <div id="rebuildModal" class="modal">
-        <div class="modal-content">
-            <h2>Rebuilding Application</h2>
-            <div class="spinner"></div>
-            <p>The server will restart momentarily...</p>
-            <p>This page will automatically reconnect.</p>
-        </div>
+        <button class="rebuild-button" onclick="rebuildSystem()">Rebuild System</button>
     </div>
 
     <script>
         let currentPath = '/';
-        let selectedPath = null;
         let ws = null;
-        let reconnectAttempts = 0;
-        const maxReconnectAttempts = 30; // 30 seconds
-        let reconnectInterval = null;
 
         function initWebSocket() {
             ws = new WebSocket(`ws://${window.location.host}/ws`);
-            ws.onmessage = function(event) {
-                const data = JSON.parse(event.data);
-                updateProgress(data);
+            
+            ws.onopen = () => {
+                console.log('WebSocket connected');
             };
-            ws.onclose = function() {
-                // Only attempt to reconnect if we're showing the rebuild modal
-                if (document.getElementById('rebuildModal').style.display === 'flex') {
-                    clearInterval(reconnectInterval); // Clear any existing interval
-                    reconnectInterval = null;
-                    attemptReconnect();
-                }
+            
+            ws.onmessage = (event) => {
+                const message = JSON.parse(event.data);
+                handleWebSocketMessage(message);
+            };
+            
+            ws.onclose = () => {
+                console.log('WebSocket disconnected');
+                setTimeout(initWebSocket, 1000); // Attempt to reconnect
+            };
+            
+            ws.onerror = (error) => {
+                console.error('WebSocket error:', error);
             };
         }
 
-        function stopReconnecting() {
-            if (reconnectInterval) {
-                clearInterval(reconnectInterval);
-                reconnectInterval = null;
-            }
-            reconnectAttempts = 0;
-            document.getElementById('rebuildModal').style.display = 'none';
-            document.getElementById('rebuildBtn').disabled = false;
-        }
+        function handleWebSocketMessage(message) {
+            const progressContainer = document.getElementById('progressContainer');
+            const progressBar = document.getElementById('progress');
+            const statusElement = document.getElementById('status');
+            const errorElement = document.getElementById('error');
 
-        function attemptReconnect() {
-            if (reconnectAttempts >= maxReconnectAttempts) {
-                stopReconnecting();
-                alert('Server reconnection failed. Please refresh the page manually.');
-                return;
-            }
-
-            reconnectAttempts++;
-            fetch('/')
-                .then(response => {
-                    if (response.ok) {
-                        stopReconnecting();
-                        window.location.reload();
-                    } else {
-                        throw new Error('Server not ready');
+            switch (message.type) {
+                case 'status':
+                    progressContainer.style.display = 'block';
+                    statusElement.textContent = `Status: ${message.status}`;
+                    if (message.error) {
+                        errorElement.style.display = 'block';
+                        errorElement.textContent = `Error: ${message.error}`;
                     }
-                })
-                .catch(() => {
-                    if (!reconnectInterval) {
-                        reconnectInterval = setInterval(attemptReconnect, 1000);
-                    }
-                });
+                    break;
+                case 'progress':
+                    progressBar.style.width = `${message.progress}%`;
+                    break;
+            }
         }
 
-        function updateProgress(data) {
-            const progressContainer = document.querySelector('.progress-container');
-            const progressBar = document.querySelector('.progress');
-            const status = document.querySelector('.status');
-
-            progressContainer.style.display = 'block';
-            progressBar.style.width = `${data.progress}%`;
-            status.textContent = data.status;
-        }
-
-        async function loadFiles(path) {
+        async function loadDirectory(path) {
             try {
                 const response = await fetch('/api/browse', {
                     method: 'POST',
@@ -238,105 +169,118 @@
                     },
                     body: JSON.stringify({ path }),
                 });
+                
+                if (!response.ok) throw new Error('Failed to load directory');
+                
                 const files = await response.json();
-                displayFiles(files);
                 currentPath = path;
-                document.querySelector('.current-path').textContent = `Current path: ${currentPath}`;
+                updateBreadcrumb();
+                displayFiles(files);
             } catch (error) {
-                console.error('Error loading files:', error);
+                console.error('Error loading directory:', error);
             }
+        }
+
+        function updateBreadcrumb() {
+            const parts = currentPath.split('/').filter(Boolean);
+            let html = '<span onclick="loadDirectory(\'/\')">/</span>';
+            let path = '';
+            
+            parts.forEach((part, index) => {
+                path += '/' + part;
+                html += ` / <span onclick="loadDirectory('${path}')">${part}</span>`;
+            });
+            
+            document.getElementById('breadcrumb').innerHTML = html;
         }
 
         function displayFiles(files) {
-            const fileList = document.querySelector('.file-list');
+            const fileList = document.getElementById('fileList');
             fileList.innerHTML = '';
-
+            
             if (currentPath !== '/') {
-                const parentItem = document.createElement('li');
-                parentItem.className = 'file-item';
-                parentItem.innerHTML = '<span class="file-icon">📁</span> ..';
-                parentItem.onclick = () => {
+                const li = document.createElement('li');
+                li.className = 'file-item directory';
+                li.textContent = '..';
+                li.onclick = () => {
                     const parentPath = currentPath.split('/').slice(0, -1).join('/') || '/';
-                    loadFiles(parentPath);
+                    loadDirectory(parentPath);
                 };
-                fileList.appendChild(parentItem);
+                fileList.appendChild(li);
             }
-
+            
             files.forEach(file => {
-                const item = document.createElement('li');
-                item.className = 'file-item';
-                item.innerHTML = `<span class="file-icon">${file.isDir ? '📁' : '📄'}</span> ${file.name}`;
+                const li = document.createElement('li');
+                li.className = `file-item ${file.isDir ? 'directory' : 'file'}`;
+                li.textContent = file.name;
                 
-                item.onclick = () => {
-                    if (file.isDir) {
-                        loadFiles(file.path);
-                    } else {
-                        selectedPath = file.path;
-                        document.querySelectorAll('.file-item').forEach(i => i.classList.remove('selected'));
-                        item.classList.add('selected');
-                        document.getElementById('optimizeBtn').disabled = false;
-                    }
-                };
-
-                fileList.appendChild(item);
+                if (file.isDir) {
+                    li.onclick = () => loadDirectory(file.path);
+                } else {
+                    li.onclick = () => optimizeMedia(file.path);
+                }
+                
+                fileList.appendChild(li);
             });
         }
 
-        async function optimizeSelected() {
-            if (!selectedPath) return;
-
+        async function optimizeMedia(path) {
             try {
+                // First initiate the optimization via HTTP
                 const response = await fetch('/api/optimize', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
                     },
-                    body: JSON.stringify({ path: selectedPath }),
+                    body: JSON.stringify({ path }),
                 });
-                const result = await response.json();
-                document.querySelector('.progress-container').style.display = 'block';
-                document.querySelector('.status').textContent = 'Optimization started...';
+                
+                if (!response.ok) throw new Error('Failed to start optimization');
+
+                // Then send the optimization request via WebSocket
+                if (ws && ws.readyState === WebSocket.OPEN) {
+                    ws.send(JSON.stringify({
+                        type: 'optimize',
+                        data: { path }
+                    }));
+                }
+
+                // Show progress container
+                const progressContainer = document.getElementById('progressContainer');
+                const progressBar = document.getElementById('progress');
+                const statusElement = document.getElementById('status');
+                const errorElement = document.getElementById('error');
+
+                progressContainer.style.display = 'block';
+                progressBar.style.width = '0%';
+                statusElement.textContent = 'Status: Initializing...';
+                errorElement.style.display = 'none';
             } catch (error) {
                 console.error('Error starting optimization:', error);
+                document.getElementById('error').textContent = `Error: ${error.message}`;
+                document.getElementById('error').style.display = 'block';
             }
         }
 
-        async function rebuild() {
-            const rebuildBtn = document.getElementById('rebuildBtn');
-            rebuildBtn.disabled = true;
-            
-            // Show the rebuild modal
-            document.getElementById('rebuildModal').style.display = 'flex';
-            reconnectAttempts = 0;
-
+        async function rebuildSystem() {
             try {
                 const response = await fetch('/api/rebuild', {
                     method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    }
                 });
                 
-                if (!response.ok) {
-                    throw new Error('Rebuild failed');
-                }
-
-                // The server will restart, and the WebSocket will close
-                // triggering the reconnection process
+                if (!response.ok) throw new Error('Failed to initiate rebuild');
+                
+                const result = await response.json();
+                alert(result.message);
             } catch (error) {
-                console.error('Error during rebuild:', error);
-                alert('Error during rebuild: ' + error.message);
-                stopReconnecting();
+                console.error('Error rebuilding system:', error);
+                alert('Failed to rebuild system: ' + error.message);
             }
         }
 
         // Initialize
-        document.addEventListener('DOMContentLoaded', () => {
-            initWebSocket();
-            loadFiles('/');
-            document.getElementById('optimizeBtn').onclick = optimizeSelected;
-            document.getElementById('rebuildBtn').onclick = rebuild;
-        });
+        initWebSocket();
+        loadDirectory('/');
     </script>
 </body>
 </html>

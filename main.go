@@ -101,14 +101,48 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 
 	// Handle incoming messages
 	for {
-		_, _, err := conn.ReadMessage()
+		_, message, err := conn.ReadMessage()
 		if err != nil {
 			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
 				log.Printf("WebSocket error: %v", err)
 			}
 			break
 		}
+
+		// Parse the incoming message
+		var msg WSMessage
+		if err := json.Unmarshal(message, &msg); err != nil {
+			log.Printf("Failed to parse WebSocket message: %v", err)
+			continue
+		}
+
+		// Handle different message types
+		switch msg.Type {
+		case "optimize":
+			handleOptimizationRequest(conn, msg.Data.(map[string]interface{})["path"].(string))
+		}
 	}
+}
+
+func handleOptimizationRequest(conn *websocket.Conn, path string) {
+	// Create new optimization job
+	job := &OptimizationJob{
+		SourcePath: path,
+		Status:     "queued",
+		Progress:   0,
+		WSConn:     conn,
+	}
+
+	// Store job
+	activeJobs.Lock()
+	activeJobs.jobs[path] = job
+	activeJobs.Unlock()
+
+	// Start optimization in background
+	go optimizeMedia(job)
+
+	// Send initial status
+	sendWSUpdate(job, "status", 0)
 }
 
 func sendWSUpdate(job *OptimizationJob, msgType string, progress float64) {
@@ -197,31 +231,12 @@ func handleOptimize(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Upgrade to WebSocket connection
-	conn, err := upgrader.Upgrade(w, r, nil)
-	if err != nil {
-		http.Error(w, "WebSocket upgrade failed", http.StatusInternalServerError)
-		return
-	}
-
-	// Create new optimization job
-	job := &OptimizationJob{
-		SourcePath: request.Path,
-		Status:     "queued",
-		Progress:   0,
-		WSConn:     conn,
-	}
-
-	// Store job
-	activeJobs.Lock()
-	activeJobs.jobs[request.Path] = job
-	activeJobs.Unlock()
-
-	// Start optimization in background
-	go optimizeMedia(job)
-
-	// Initial status update
-	sendWSUpdate(job, "status", 0)
+	// Return success response for the HTTP request
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{
+		"status": "optimization initiated",
+		"path":   request.Path,
+	})
 }
 
 func listFiles(path string) ([]FileInfo, error) {
@@ -245,12 +260,6 @@ func listFiles(path string) ([]FileInfo, error) {
 }
 
 func optimizeMedia(job *OptimizationJob) {
-	defer func() {
-		if job.WSConn != nil {
-			job.WSConn.Close()
-		}
-	}()
-
 	// Update job status
 	activeJobs.Lock()
 	job.Status = "processing"
