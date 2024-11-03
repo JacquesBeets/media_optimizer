@@ -157,6 +157,23 @@ lxc list media-optimizer -f csv -c 4
 - WebSocket is configured to accept connections from any origin (suitable for development)
 - Use `rebuild.sh` (Linux) or `rebuild.bat` (Windows) to rebuild the server during development
 
+### Handling Git File Mode Issues
+
+If you encounter issues with Git detecting file mode changes when making rebuild.sh executable, follow these steps on the server:
+
+```bash
+# Configure Git to ignore file mode changes
+git config core.fileMode false
+
+# Make the script executable
+chmod +x rebuild.sh
+
+# Tell Git to ignore changes to rebuild.sh
+git update-index --skip-worktree rebuild.sh
+```
+
+These commands will prevent Git from tracking executable bit changes and allow smooth git pull operations without conflicts from file mode changes.
+
 ## Requirements
 
 - Go 1.21.6 or later
