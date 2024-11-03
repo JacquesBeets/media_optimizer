@@ -5,11 +5,15 @@ set -e
 
 echo "Starting rebuild process..."
 
-# Function to check service status
+# Function to check service status with error capture
 check_service_status() {
     echo "Checking service status..."
-    sudo systemctl status media-optimizer.service || true
+    sudo systemctl status media-optimizer.service 2>&1 || true
 }
+
+# Show service configuration
+echo "Current service configuration:"
+sudo systemctl cat media-optimizer.service
 
 # Pull latest changes
 echo "Pulling latest changes..."
@@ -29,37 +33,46 @@ if ! GOOS=linux go build -o media-optimizer; then
     exit 1
 fi
 
+# Get absolute path
+BINARY_PATH="$(pwd)/media-optimizer"
+
 # Ensure proper permissions
 echo "Setting binary permissions..."
-sudo chmod 755 media-optimizer
+sudo chmod 755 "$BINARY_PATH"
 
 # Print working directory and binary location
 echo "Current environment:"
 pwd
-ls -l media-optimizer
+ls -l "$BINARY_PATH"
 
-# Start service directly first to check for immediate errors
-echo "Testing binary directly..."
-./media-optimizer &
-sleep 2
-sudo pkill -f media-optimizer
+# Start service with full path and error capture
+echo "Starting service..."
+START_OUTPUT=$(sudo systemctl start media-optimizer.service 2>&1)
+START_STATUS=$?
 
-# Now start with systemd
-echo "Starting service with systemd..."
-sudo systemctl start media-optimizer.service
+if [ $START_STATUS -ne 0 ]; then
+    echo "Failed to start service. Error output:"
+    echo "$START_OUTPUT"
+    echo "Trying direct execution..."
+    sudo "$BINARY_PATH" 2>&1
+    exit 1
+fi
+
+# Check logs immediately after start
+echo "Checking service logs..."
+sudo journalctl -u media-optimizer.service -n 50 --no-pager --since "10 seconds ago"
 
 # Give it a moment to start
 sleep 2
 
-# Check status
+# Final status check
+echo "Final service status:"
 check_service_status
 
-# Verify process is running
-if ! pgrep -f media-optimizer > /dev/null; then
-    echo "ERROR: Process not found. Trying direct start..."
-    # If systemd failed, try to run directly to see output
-    sudo ./media-optimizer
-    exit 1
-fi
+echo "Process information:"
+ps aux | grep media-optimizer
+
+echo "Port status:"
+sudo netstat -tulpn | grep media-optimizer
 
 echo "Rebuild completed successfully"
