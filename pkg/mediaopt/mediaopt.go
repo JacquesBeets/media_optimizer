@@ -10,6 +10,9 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
+	"syscall"
+	"time"
 )
 
 type OptimizationResult struct {
@@ -28,6 +31,16 @@ type AudioOptimizationParams struct {
 	CompressRatio     float64
 	DialogBoost       float64
 	OnProgress        ProgressCallback
+}
+
+// activeProcesses tracks running FFmpeg processes
+var activeProcesses struct {
+	sync.Mutex
+	procs map[string]*exec.Cmd
+}
+
+func init() {
+	activeProcesses.procs = make(map[string]*exec.Cmd)
 }
 
 // NewDefaultAudioParams creates default audio optimization parameters
@@ -80,6 +93,32 @@ func parseProgress(line string, duration float64) float64 {
 	return -1
 }
 
+// CleanupProcess ensures the FFmpeg process is properly terminated
+func CleanupProcess(inputFile string) {
+	activeProcesses.Lock()
+	defer activeProcesses.Unlock()
+
+	if cmd, exists := activeProcesses.procs[inputFile]; exists {
+		if cmd.Process != nil {
+			// Send SIGTERM first for graceful shutdown
+			cmd.Process.Signal(syscall.SIGTERM)
+			// Wait a bit for graceful shutdown
+			done := make(chan error)
+			go func() {
+				done <- cmd.Wait()
+			}()
+			select {
+			case <-done:
+				// Process terminated gracefully
+			case <-time.After(5 * time.Second):
+				// Force kill if still running
+				cmd.Process.Kill()
+			}
+		}
+		delete(activeProcesses.procs, inputFile)
+	}
+}
+
 // OptimizeAudio processes the audio for better dialog clarity on 2.1 systems
 func OptimizeAudio(params *AudioOptimizationParams) OptimizationResult {
 	if _, err := os.Stat(params.InputFile); os.IsNotExist(err) {
@@ -88,6 +127,9 @@ func OptimizeAudio(params *AudioOptimizationParams) OptimizationResult {
 			Error:   fmt.Errorf("input file does not exist: %s", params.InputFile),
 		}
 	}
+
+	// Cleanup any existing process for this file
+	CleanupProcess(params.InputFile)
 
 	// Get video duration for progress calculation
 	duration, err := getDuration(params.InputFile)
@@ -133,6 +175,11 @@ func OptimizeAudio(params *AudioOptimizationParams) OptimizationResult {
 		"-y",
 		params.OutputFile,
 	)
+
+	// Store the command in activeProcesses
+	activeProcesses.Lock()
+	activeProcesses.procs[params.InputFile] = cmd
+	activeProcesses.Unlock()
 
 	// Create pipe for stderr to capture FFmpeg output
 	stderr, err := cmd.StderrPipe()
@@ -184,7 +231,14 @@ func OptimizeAudio(params *AudioOptimizationParams) OptimizationResult {
 	}()
 
 	// Wait for completion
-	if err := cmd.Wait(); err != nil {
+	err = cmd.Wait()
+
+	// Clean up process tracking
+	activeProcesses.Lock()
+	delete(activeProcesses.procs, params.InputFile)
+	activeProcesses.Unlock()
+
+	if err != nil {
 		return OptimizationResult{
 			Success: false,
 			Error:   fmt.Errorf("FFmpeg processing failed: %v", err),
