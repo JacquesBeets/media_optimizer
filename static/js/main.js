@@ -21,6 +21,7 @@ function initWebSocket() {
     };
 
     ws.onclose = function() {
+        console.log('WebSocket connection closed');
         // Only attempt to reconnect if we're showing the rebuild modal
         if (document.getElementById('rebuildModal').style.display === 'flex') {
             clearInterval(reconnectInterval);
@@ -35,6 +36,11 @@ function initWebSocket() {
 
     ws.onopen = function() {
         console.log('WebSocket connection established');
+        // If we successfully reconnect after a rebuild, hide the modal
+        if (document.getElementById('rebuildModal').style.display === 'flex') {
+            stopReconnecting();
+            window.location.reload(); // Reload the page to ensure fresh state
+        }
     };
 }
 
@@ -56,16 +62,21 @@ function attemptReconnect() {
     }
 
     reconnectAttempts++;
+    console.log(`Reconnection attempt ${reconnectAttempts}/${maxReconnectAttempts}`);
+
+    // Try to connect to the server
     fetch('/')
         .then(response => {
             if (response.ok) {
-                stopReconnecting();
-                window.location.reload();
+                console.log('Server is responding, attempting WebSocket reconnection');
+                // Don't reload immediately, try to establish WebSocket connection first
+                initWebSocket();
             } else {
                 throw new Error('Server not ready');
             }
         })
         .catch(() => {
+            console.log('Server not ready, will retry...');
             if (!reconnectInterval) {
                 reconnectInterval = setInterval(attemptReconnect, 1000);
             }
