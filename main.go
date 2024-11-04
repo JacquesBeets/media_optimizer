@@ -267,7 +267,7 @@ func optimizeMedia(job *OptimizationJob) {
 	sendWSUpdate(job, "status", 0)
 
 	// Create optimization parameters with progress callback
-	params := mediaopt.NewDefaultAudioParams(job.SourcePath)
+	params := mediaopt.NewDefaultParams(job.SourcePath)
 	params.OnProgress = func(progress float64) {
 		activeJobs.Lock()
 		job.Progress = int(progress)
@@ -276,7 +276,7 @@ func optimizeMedia(job *OptimizationJob) {
 	}
 
 	// Perform optimization
-	result := mediaopt.OptimizeAudio(params)
+	result := mediaopt.OptimizeMedia(params)
 
 	// Update job status based on result
 	activeJobs.Lock()
