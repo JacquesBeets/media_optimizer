@@ -33,6 +33,7 @@ type OptimizationJob struct {
 	Progress   int    `json:"progress"`
 	Error      string `json:"error,omitempty"`
 	WSConn     *websocket.Conn
+	wsMutex    sync.Mutex // Mutex for WebSocket writes
 }
 
 type RebuildResponse struct {
@@ -149,6 +150,10 @@ func sendWSUpdate(job *OptimizationJob, msgType string, progress float64) {
 	if job.WSConn == nil {
 		return
 	}
+
+	// Lock the WebSocket for writing
+	job.wsMutex.Lock()
+	defer job.wsMutex.Unlock()
 
 	msg := WSMessage{
 		Type:     msgType,
