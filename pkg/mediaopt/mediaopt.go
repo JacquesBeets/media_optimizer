@@ -57,8 +57,8 @@ func NewDefaultParams(inputFile string) *OptimizationParams {
 		CompressThreshold: -20,
 		CompressRatio:     3,
 		DialogBoost:       2,
-		VideoQuality:      23,       // Balanced quality (18-28, lower is better)
-		VideoPreset:       "faster", // Good balance of speed and quality
+		VideoQuality:      23,         // Balanced quality (18-28, lower is better quality)
+		VideoPreset:       "veryfast", // Changed from "faster" to "veryfast" for better performance
 	}
 }
 
@@ -98,6 +98,23 @@ func hasVideoStream(inputFile string) (bool, error) {
 	}
 
 	return strings.TrimSpace(string(output)) == "video", nil
+}
+
+// getVideoCodec gets the video codec of the input file
+func getVideoCodec(inputFile string) (string, error) {
+	cmd := exec.Command("ffprobe",
+		"-v", "error",
+		"-select_streams", "v:0",
+		"-show_entries", "stream=codec_name",
+		"-of", "default=noprint_wrappers=1:nokey=1",
+		inputFile)
+
+	output, err := cmd.Output()
+	if err != nil {
+		return "", err
+	}
+
+	return strings.TrimSpace(string(output)), nil
 }
 
 // parseProgress parses FFmpeg progress output
@@ -196,18 +213,40 @@ func OptimizeMedia(params *OptimizationParams) OptimizationResult {
 		threads = 1
 	}
 
+	// Get input video codec
+	videoCodec := "libx264" // default codec
+	if hasVideo {
+		if codec, err := getVideoCodec(params.InputFile); err == nil {
+			// If input is already h264, use copy codec for better performance
+			if codec == "h264" {
+				videoCodec = "copy"
+			}
+		}
+	}
+
 	// Build FFmpeg command based on media type
 	var cmd *exec.Cmd
 	if hasVideo {
-		// Video processing command with keyframe interval for seeking
-		cmd = exec.Command("ffmpeg",
+		// Video processing command with optimized parameters
+		args := []string{
 			"-i", params.InputFile,
 			"-threads", fmt.Sprintf("%d", threads),
-			"-c:v", "libx264", // Use x264 codec for video
-			"-preset", params.VideoPreset,
-			"-crf", fmt.Sprintf("%d", params.VideoQuality),
-			"-g", "30", // Keyframe interval for better seeking
-			"-sc_threshold", "0", // Disable scene change detection for consistent quality
+			"-c:v", videoCodec,
+		}
+
+		// Only add video encoding parameters if we're not copying the video stream
+		if videoCodec != "copy" {
+			args = append(args,
+				"-preset", params.VideoPreset,
+				"-crf", fmt.Sprintf("%d", params.VideoQuality),
+				"-g", "30", // Keyframe interval for better seeking
+				"-sc_threshold", "0", // Disable scene change detection
+				"-tune", "film", // Optimize for film content
+			)
+		}
+
+		// Add audio and output parameters
+		args = append(args,
 			"-af", audioFilter,
 			"-c:a", "aac",
 			"-b:a", "192k",
@@ -216,6 +255,8 @@ func OptimizeMedia(params *OptimizationParams) OptimizationResult {
 			"-y",
 			params.OutputFile,
 		)
+
+		cmd = exec.Command("ffmpeg", args...)
 	} else {
 		// Audio-only processing command
 		cmd = exec.Command("ffmpeg",
