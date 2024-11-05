@@ -9,7 +9,12 @@ IO_PRIORITY=7     # I/O priority (0-7, 7 being lowest)
 
 # Function to sanitize filename
 sanitize_filename() {
-    echo "$1" | sed -e 's/[{}[\]()@#$%^&*]//_/g' -e 's/ /_/g'
+    local filename="$1"
+    # First, escape the filename for sed
+    filename=$(echo "$filename" | sed 's/[][\*\^\&\$\?\*(){}#|]/\\&/g')
+    # Then remove/replace special characters
+    filename=$(echo "$filename" | tr -d '{}[]()' | tr ' ' '_')
+    echo "$filename"
 }
 
 # Function to process a single file
@@ -46,11 +51,11 @@ process_file() {
     fi
 
     # Create sanitized temporary filename
-    temp_filename=$(sanitize_filename "${filename}")
-    temp_output="${temp_dir}/temp_${temp_filename}"
+    temp_basename=$(sanitize_filename "${basename}")
+    temp_output="${temp_dir}/temp_${temp_basename}.${extension}"
     
     # Create progress file for monitoring
-    progress_file="${temp_dir}/progress_$(sanitize_filename "${basename}").txt"
+    progress_file="${temp_dir}/progress_${temp_basename}.txt"
     
     echo "Processing file: $input_file"
     echo "Temporary output: $temp_output"
