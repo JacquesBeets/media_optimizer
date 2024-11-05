@@ -124,6 +124,17 @@ func CleanupProcess(inputFile string) {
 	}
 }
 
+// setPriority sets process priority and I/O priority
+func setPriority(pid int) {
+	// Set CPU priority (nice level)
+	niceCmd := exec.Command("nice", "-n", "10", "--", strconv.Itoa(pid))
+	niceCmd.Run()
+
+	// Set I/O priority
+	ioniceCmd := exec.Command("ionice", "-c", "2", "-n", "7", "-p", strconv.Itoa(pid))
+	ioniceCmd.Run()
+}
+
 // OptimizeMedia processes the media file for better quality and compression
 func OptimizeMedia(params *OptimizationParams) OptimizationResult {
 	if _, err := os.Stat(params.InputFile); os.IsNotExist(err) {
@@ -201,11 +212,6 @@ func OptimizeMedia(params *OptimizationParams) OptimizationResult {
 
 	cmd := exec.Command("ffmpeg", args...)
 
-	// Set process priority (Windows specific)
-	cmd.SysProcAttr = &syscall.SysProcAttr{
-		CreationFlags: 0x00004000, // BELOW_NORMAL_PRIORITY_CLASS
-	}
-
 	// Store the command in activeProcesses
 	activeProcesses.Lock()
 	activeProcesses.procs[params.InputFile] = cmd
@@ -226,6 +232,11 @@ func OptimizeMedia(params *OptimizationParams) OptimizationResult {
 			Success: false,
 			Error:   fmt.Errorf("failed to start FFmpeg: %v", err),
 		}
+	}
+
+	// Set process priority after start
+	if cmd.Process != nil {
+		setPriority(cmd.Process.Pid)
 	}
 
 	// Monitor progress file
