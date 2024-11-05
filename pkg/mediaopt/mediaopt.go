@@ -25,14 +25,11 @@ type ProgressCallback func(float64)
 
 // OptimizationParams contains parameters for media optimization
 type OptimizationParams struct {
-	InputFile         string
-	OutputFile        string
-	CompressThreshold float64
-	CompressRatio     float64
-	DialogBoost       float64
-	VideoQuality      int    // CRF value for x264 (18-28, lower is better quality)
-	VideoPreset       string // x264 preset (ultrafast, superfast, veryfast, faster, fast, medium, slow, slower, veryslow)
-	OnProgress        ProgressCallback
+	InputFile   string
+	OutputFile  string
+	MemoryLimit string // Memory limit per FFmpeg process
+	TempDir     string // Custom temp directory for processing
+	OnProgress  ProgressCallback
 }
 
 // activeProcesses tracks running FFmpeg processes
@@ -50,15 +47,13 @@ func NewDefaultParams(inputFile string) *OptimizationParams {
 	ext := filepath.Ext(inputFile)
 	base := inputFile[:len(inputFile)-len(ext)]
 	outputFile := base + "_optimized" + ext
+	tempDir := filepath.Join(os.TempDir(), "ffmpeg_processing")
 
 	return &OptimizationParams{
-		InputFile:         inputFile,
-		OutputFile:        outputFile,
-		CompressThreshold: -20,
-		CompressRatio:     3,
-		DialogBoost:       2,
-		VideoQuality:      23,         // Balanced quality (18-28, lower is better quality)
-		VideoPreset:       "veryfast", // Changed from "faster" to "veryfast" for better performance
+		InputFile:   inputFile,
+		OutputFile:  outputFile,
+		MemoryLimit: "4G",
+		TempDir:     tempDir,
 	}
 }
 
@@ -83,38 +78,13 @@ func getDuration(inputFile string) (float64, error) {
 	return duration, nil
 }
 
-// hasVideoStream checks if the file has a video stream
-func hasVideoStream(inputFile string) (bool, error) {
-	cmd := exec.Command("ffprobe",
-		"-v", "error",
-		"-select_streams", "v:0",
-		"-show_entries", "stream=codec_type",
-		"-of", "default=noprint_wrappers=1:nokey=1",
-		inputFile)
-
-	output, err := cmd.Output()
+// getFileSize gets the size of the file in bytes
+func getFileSize(path string) (int64, error) {
+	info, err := os.Stat(path)
 	if err != nil {
-		return false, err
+		return 0, err
 	}
-
-	return strings.TrimSpace(string(output)) == "video", nil
-}
-
-// getVideoCodec gets the video codec of the input file
-func getVideoCodec(inputFile string) (string, error) {
-	cmd := exec.Command("ffprobe",
-		"-v", "error",
-		"-select_streams", "v:0",
-		"-show_entries", "stream=codec_name",
-		"-of", "default=noprint_wrappers=1:nokey=1",
-		inputFile)
-
-	output, err := cmd.Output()
-	if err != nil {
-		return "", err
-	}
-
-	return strings.TrimSpace(string(output)), nil
+	return info.Size(), nil
 }
 
 // parseProgress parses FFmpeg progress output
@@ -138,9 +108,7 @@ func CleanupProcess(inputFile string) {
 
 	if cmd, exists := activeProcesses.procs[inputFile]; exists {
 		if cmd.Process != nil {
-			// Send SIGTERM first for graceful shutdown
 			cmd.Process.Signal(syscall.SIGTERM)
-			// Wait a bit for graceful shutdown
 			done := make(chan error)
 			go func() {
 				done <- cmd.Wait()
@@ -149,7 +117,6 @@ func CleanupProcess(inputFile string) {
 			case <-done:
 				// Process terminated gracefully
 			case <-time.After(5 * time.Second):
-				// Force kill if still running
 				cmd.Process.Kill()
 			}
 		}
@@ -166,6 +133,14 @@ func OptimizeMedia(params *OptimizationParams) OptimizationResult {
 		}
 	}
 
+	// Create temp directory if it doesn't exist
+	if err := os.MkdirAll(params.TempDir, 0755); err != nil {
+		return OptimizationResult{
+			Success: false,
+			Error:   fmt.Errorf("failed to create temp directory: %v", err),
+		}
+	}
+
 	// Cleanup any existing process for this file
 	CleanupProcess(params.InputFile)
 
@@ -178,14 +153,22 @@ func OptimizeMedia(params *OptimizationParams) OptimizationResult {
 		}
 	}
 
-	// Check if file has video stream
-	hasVideo, err := hasVideoStream(params.InputFile)
+	// Calculate optimal thread count based on file size
+	fileSize, err := getFileSize(params.InputFile)
 	if err != nil {
 		return OptimizationResult{
 			Success: false,
-			Error:   fmt.Errorf("failed to detect media type: %v", err),
+			Error:   fmt.Errorf("failed to get file size: %v", err),
 		}
 	}
+
+	threads := runtime.NumCPU()
+	if fileSize < 10*1024*1024*1024 { // Less than 10GB
+		threads = threads / 2
+	}
+
+	// Create temp output file
+	tempOutput := filepath.Join(params.TempDir, filepath.Base(params.InputFile)+".temp")
 
 	// Create progress file
 	progressFile, err := os.CreateTemp("", "ffmpeg-progress-*")
@@ -198,77 +181,29 @@ func OptimizeMedia(params *OptimizationParams) OptimizationResult {
 	defer os.Remove(progressFile.Name())
 	defer progressFile.Close()
 
-	// Construct FFmpeg filter chain for audio
-	audioFilter := fmt.Sprintf(
-		"loudnorm=I=-16:TP=-1.5:LRA=11,"+
-			"compand=attacks=0.05:decays=1:points=-90/-90|-70/-70|-60/-60|%f/%f:gain=2,"+
-			"equalizer=f=2000:t=h:w=1:g=%f,"+
-			"alimiter=level_in=1:level_out=1:limit=1:attack=5:release=50",
-		params.CompressThreshold, params.CompressRatio, params.DialogBoost,
-	)
-
-	// Calculate optimal thread count (use 75% of available cores to prevent system lockup)
-	threads := int(float64(runtime.NumCPU()) * 0.75)
-	if threads < 1 {
-		threads = 1
+	// Build FFmpeg command with optimized parameters from the bash script
+	args := []string{
+		"-i", params.InputFile,
+		"-map", "0:v:0", "-c:v", "copy",
+		"-map", "0:a:0",
+		"-c:a", "ac3",
+		"-ac", "2",
+		"-b:a", "384k",
+		"-af", "volume=1.5,dynaudnorm=f=150:g=15:p=0.7,loudnorm=I=-16:TP=-1.5:LRA=11",
+		"-metadata:s:a:0", "title=2.1 Optimized",
+		"-threads", fmt.Sprintf("%d", threads),
+		"-max_memory", params.MemoryLimit,
+		"-y",
+		"-nostdin",
+		"-progress", progressFile.Name(),
+		tempOutput,
 	}
 
-	// Get input video codec
-	videoCodec := "libx264" // default codec
-	if hasVideo {
-		if codec, err := getVideoCodec(params.InputFile); err == nil {
-			// If input is already h264, use copy codec for better performance
-			if codec == "h264" {
-				videoCodec = "copy"
-			}
-		}
-	}
+	cmd := exec.Command("ffmpeg", args...)
 
-	// Build FFmpeg command based on media type
-	var cmd *exec.Cmd
-	if hasVideo {
-		// Video processing command with optimized parameters
-		args := []string{
-			"-i", params.InputFile,
-			"-threads", fmt.Sprintf("%d", threads),
-			"-c:v", videoCodec,
-		}
-
-		// Only add video encoding parameters if we're not copying the video stream
-		if videoCodec != "copy" {
-			args = append(args,
-				"-preset", params.VideoPreset,
-				"-crf", fmt.Sprintf("%d", params.VideoQuality),
-				"-g", "30", // Keyframe interval for better seeking
-				"-sc_threshold", "0", // Disable scene change detection
-				"-tune", "film", // Optimize for film content
-			)
-		}
-
-		// Add audio and output parameters
-		args = append(args,
-			"-af", audioFilter,
-			"-c:a", "aac",
-			"-b:a", "192k",
-			"-movflags", "+faststart", // Enable fast start for web playback
-			"-progress", progressFile.Name(),
-			"-y",
-			params.OutputFile,
-		)
-
-		cmd = exec.Command("ffmpeg", args...)
-	} else {
-		// Audio-only processing command
-		cmd = exec.Command("ffmpeg",
-			"-i", params.InputFile,
-			"-threads", fmt.Sprintf("%d", threads),
-			"-af", audioFilter,
-			"-c:a", "aac",
-			"-b:a", "192k",
-			"-progress", progressFile.Name(),
-			"-y",
-			params.OutputFile,
-		)
+	// Set process priority (Windows specific)
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		CreationFlags: 0x00004000, // BELOW_NORMAL_PRIORITY_CLASS
 	}
 
 	// Store the command in activeProcesses
@@ -321,7 +256,6 @@ func OptimizeMedia(params *OptimizationParams) OptimizationResult {
 	go func() {
 		scanner := bufio.NewScanner(stderr)
 		for scanner.Scan() {
-			// Log FFmpeg output for debugging
 			fmt.Println("FFmpeg:", scanner.Text())
 		}
 	}()
@@ -335,9 +269,20 @@ func OptimizeMedia(params *OptimizationParams) OptimizationResult {
 	activeProcesses.Unlock()
 
 	if err != nil {
+		// Cleanup temp file on error
+		os.Remove(tempOutput)
 		return OptimizationResult{
 			Success: false,
 			Error:   fmt.Errorf("FFmpeg processing failed: %v", err),
+		}
+	}
+
+	// Move temp file to final destination
+	if err := os.Rename(tempOutput, params.OutputFile); err != nil {
+		os.Remove(tempOutput)
+		return OptimizationResult{
+			Success: false,
+			Error:   fmt.Errorf("failed to move output file: %v", err),
 		}
 	}
 
