@@ -2,6 +2,7 @@ package mediaopt
 
 import (
 	"bufio"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -25,7 +26,6 @@ type OptimizationResult struct {
 
 type ProgressCallback func(float64)
 
-// OptimizationParams contains parameters for media optimization
 type OptimizationParams struct {
 	InputFile   string
 	OutputFile  string
@@ -34,59 +34,95 @@ type OptimizationParams struct {
 	OnProgress  ProgressCallback
 }
 
-// activeProcesses tracks running FFmpeg processes
-var activeProcesses struct {
-	sync.Mutex
-	procs map[string]*exec.Cmd
-}
+var (
+	activeProcesses struct {
+		sync.Mutex
+		procs map[string]*exec.Cmd
+	}
+	logFile *os.File
+)
 
 func init() {
 	activeProcesses.procs = make(map[string]*exec.Cmd)
+
+	// Set up logging to file in temp directory
+	logDir := filepath.Join(os.TempDir(), "ffmpeg_processing")
+	os.MkdirAll(logDir, 0755)
+	logPath := filepath.Join(logDir, "mediaopt.log")
+	var err error
+	logFile, err = os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		log.Printf("Failed to open log file: %v", err)
+		return
+	}
+	log.SetOutput(logFile)
 }
 
-// logError logs error messages with timestamp and details
+type StreamInfo struct {
+	Index     int    `json:"index"`
+	CodecType string `json:"codec_type"`
+	Language  string `json:"tags,omitempty"`
+}
+
+type FFProbeOutput struct {
+	Streams []StreamInfo `json:"streams"`
+}
+
 func logError(format string, v ...interface{}) {
-	log.Printf("ERROR: "+format, v...)
+	msg := fmt.Sprintf(format, v...)
+	log.Printf("ERROR: %s", msg)
+	fmt.Printf("ERROR: %s\n", msg) // Also print to stdout
 }
 
-// logInfo logs informational messages with timestamp
 func logInfo(format string, v ...interface{}) {
-	log.Printf("INFO: "+format, v...)
+	msg := fmt.Sprintf(format, v...)
+	log.Printf("INFO: %s", msg)
+	fmt.Printf("INFO: %s\n", msg) // Also print to stdout
 }
 
-// getEnglishAudioStream gets the index of the English audio stream
 func getEnglishAudioStream(inputFile string) (int, error) {
 	cmd := exec.Command("ffprobe",
 		"-v", "quiet",
+		"-analyzeduration", "100M",
+		"-probesize", "100M",
 		"-print_format", "json",
 		"-show_streams",
-		"-select_streams", "a",
 		inputFile)
 
 	output, err := cmd.Output()
 	if err != nil {
-		return 0, fmt.Errorf("failed to get audio streams: %v", err)
+		return 0, fmt.Errorf("failed to get streams: %v", err)
 	}
 
-	// Look for English stream in the output
-	outputStr := string(output)
-	if strings.Contains(strings.ToLower(outputStr), "language\":\"eng") {
-		// Parse the stream index from the output
-		re := regexp.MustCompile(`"index":(\d+).*?"language":"eng"`)
-		matches := re.FindStringSubmatch(outputStr)
-		if len(matches) > 1 {
-			index, err := strconv.Atoi(matches[1])
-			if err == nil {
-				return index, nil
+	var probeOutput FFProbeOutput
+	if err := json.Unmarshal(output, &probeOutput); err != nil {
+		return 0, fmt.Errorf("failed to parse ffprobe output: %v", err)
+	}
+
+	logInfo("Found %d streams in file", len(probeOutput.Streams))
+
+	// First pass: Look for audio stream with eng language tag
+	for _, stream := range probeOutput.Streams {
+		if stream.CodecType == "audio" {
+			tags := strings.ToLower(stream.Language)
+			if strings.Contains(tags, "eng") {
+				logInfo("Found English audio stream at index %d", stream.Index)
+				return stream.Index, nil
 			}
 		}
 	}
 
-	// If no English stream found, return the first audio stream
-	return 0, nil
+	// Second pass: Look for any audio stream
+	for _, stream := range probeOutput.Streams {
+		if stream.CodecType == "audio" {
+			logInfo("No English audio found, using first audio stream at index %d", stream.Index)
+			return stream.Index, nil
+		}
+	}
+
+	return 0, fmt.Errorf("no suitable audio stream found")
 }
 
-// sanitizeFilename removes or replaces characters that might cause issues
 func sanitizeFilename(filename string) string {
 	ext := filepath.Ext(filename)
 	base := strings.TrimSuffix(filename, ext)
@@ -108,7 +144,6 @@ func sanitizeFilename(filename string) string {
 	return sanitized + ext
 }
 
-// NewDefaultParams creates default optimization parameters
 func NewDefaultParams(inputFile string) *OptimizationParams {
 	ext := filepath.Ext(inputFile)
 	base := inputFile[:len(inputFile)-len(ext)]
@@ -126,6 +161,8 @@ func NewDefaultParams(inputFile string) *OptimizationParams {
 func getDuration(inputFile string) (float64, error) {
 	cmd := exec.Command("ffprobe",
 		"-v", "error",
+		"-analyzeduration", "100M",
+		"-probesize", "100M",
 		"-show_entries", "format=duration",
 		"-of", "default=noprint_wrappers=1:nokey=1",
 		inputFile)
@@ -202,6 +239,7 @@ func setPriority(pid int) {
 
 func OptimizeMedia(params *OptimizationParams) OptimizationResult {
 	logInfo("Starting optimization for %s", params.InputFile)
+	logInfo("Log file location: %s", filepath.Join(params.TempDir, "mediaopt.log"))
 
 	if _, err := os.Stat(params.InputFile); os.IsNotExist(err) {
 		return OptimizationResult{
@@ -219,11 +257,10 @@ func OptimizeMedia(params *OptimizationParams) OptimizationResult {
 
 	CleanupProcess(params.InputFile)
 
-	// Get English audio stream index
 	audioStreamIndex, err := getEnglishAudioStream(params.InputFile)
 	if err != nil {
 		logError("Failed to get English audio stream: %v", err)
-		audioStreamIndex = 0 // Fallback to first audio stream
+		audioStreamIndex = 0
 	}
 	logInfo("Using audio stream index: %d", audioStreamIndex)
 
@@ -265,8 +302,11 @@ func OptimizeMedia(params *OptimizationParams) OptimizationResult {
 	reportFile := filepath.Join(params.TempDir, fmt.Sprintf("ffreport_%d.log", time.Now().UnixNano()))
 
 	args := []string{
+		"-analyzeduration", "100M",
+		"-probesize", "100M",
 		"-i", params.InputFile,
-		"-map", "0:v:0", "-c:v", "copy",
+		"-map", "0:v:0",
+		"-c:v", "copy",
 		"-map", fmt.Sprintf("0:a:%d", audioStreamIndex),
 		"-c:a", "ac3",
 		"-ac", "2",
@@ -274,6 +314,7 @@ func OptimizeMedia(params *OptimizationParams) OptimizationResult {
 		"-af", "volume=1.5,dynaudnorm=f=150:g=15:p=0.7,loudnorm=I=-16:TP=-1.5:LRA=11",
 		"-metadata:s:a:0", "title=2.1 Optimized",
 		"-metadata:s:a:0", "language=eng",
+		"-movflags", "+faststart",
 		"-threads", fmt.Sprintf("%d", threads),
 		"-y",
 		"-nostdin",
@@ -337,6 +378,7 @@ func OptimizeMedia(params *OptimizationParams) OptimizationResult {
 				if progress > lastProgress {
 					lastProgress = progress
 					lastProgressTime = time.Now()
+					logInfo("Progress: %.2f%%", progress)
 				} else if time.Since(lastProgressTime) > progressStallTimeout {
 					logError("Progress stalled for more than %v minutes", progressStallTimeout.Minutes())
 					cmd.Process.Signal(syscall.SIGTERM)
@@ -354,7 +396,7 @@ func OptimizeMedia(params *OptimizationParams) OptimizationResult {
 		scanner := bufio.NewScanner(stderr)
 		for scanner.Scan() {
 			text := scanner.Text()
-			fmt.Println("FFmpeg:", text)
+			logInfo("FFmpeg: %s", text)
 			if strings.Contains(strings.ToLower(text), "error") {
 				logError("FFmpeg error: %s", text)
 			}
