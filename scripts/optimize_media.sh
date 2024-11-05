@@ -25,8 +25,8 @@ process_file() {
     ionice -c "$IO_CLASS" -n "$IO_PRIORITY" -p $$
 
     # Calculate optimal thread count based on file size
-    file_size=$(stat -f %z "$input_file")
-    if [ $file_size -gt 10737418240 ]; then  # 10GB
+    file_size=$(stat -c %s "$input_file")
+    if [ "$file_size" -gt 10737418240 ]; then  # 10GB
         thread_count=$THREADS
     else
         thread_count=$((THREADS / 2))
@@ -44,7 +44,8 @@ process_file() {
     progress_file="${temp_dir}/progress_${basename}.txt"
     
     # Process with FFmpeg using optimized settings
-    ffmpeg -i "$input_file" \
+    ffmpeg -analyzeduration 100M -probesize 100M \
+        -i "$input_file" \
         -map 0:v:0 -c:v copy \
         -map "0:a:${audio_stream}" \
         -c:a ac3 \
