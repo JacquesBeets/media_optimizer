@@ -45,15 +45,29 @@ func init() {
 
 // sanitizeFilename removes or replaces characters that might cause issues
 func sanitizeFilename(filename string) string {
+	// Extract extension
+	ext := filepath.Ext(filename)
+	base := strings.TrimSuffix(filename, ext)
+
 	// Replace problematic characters with underscores
 	reg := regexp.MustCompile(`[{}[\]()]+`)
-	sanitized := reg.ReplaceAllString(filename, "_")
+	sanitized := reg.ReplaceAllString(base, "_")
 
 	// Remove other potentially problematic characters
 	reg = regexp.MustCompile(`[^a-zA-Z0-9._-]`)
 	sanitized = reg.ReplaceAllString(sanitized, "_")
 
-	return sanitized
+	// Clean up multiple underscores
+	reg = regexp.MustCompile(`_+`)
+	sanitized = reg.ReplaceAllString(sanitized, "_")
+
+	// Ensure the extension is lowercase and clean
+	ext = strings.ToLower(ext)
+	if ext != ".mkv" && ext != ".mp4" && ext != ".avi" {
+		ext = ".mkv" // Default to mkv if extension is not recognized
+	}
+
+	return sanitized + ext
 }
 
 // NewDefaultParams creates default optimization parameters
@@ -194,10 +208,10 @@ func OptimizeMedia(params *OptimizationParams) OptimizationResult {
 
 	// Create sanitized temp output file
 	sanitizedName := sanitizeFilename(filepath.Base(params.InputFile))
-	tempOutput := filepath.Join(params.TempDir, sanitizedName+".temp")
+	tempOutput := filepath.Join(params.TempDir, fmt.Sprintf("temp_%d%s", time.Now().UnixNano(), filepath.Ext(sanitizedName)))
 
 	// Create progress file
-	progressFile, err := os.CreateTemp("", "ffmpeg-progress-*")
+	progressFile, err := os.CreateTemp(params.TempDir, "ffmpeg-progress-*.txt")
 	if err != nil {
 		return OptimizationResult{
 			Success: false,
@@ -207,7 +221,10 @@ func OptimizeMedia(params *OptimizationParams) OptimizationResult {
 	defer os.Remove(progressFile.Name())
 	defer progressFile.Close()
 
-	// Build FFmpeg command with optimized parameters from the bash script
+	// Create FFmpeg report file in temp directory
+	reportFile := filepath.Join(params.TempDir, fmt.Sprintf("ffreport_%d.log", time.Now().UnixNano()))
+
+	// Build FFmpeg command with optimized parameters
 	args := []string{
 		"-i", params.InputFile,
 		"-map", "0:v:0", "-c:v", "copy",
@@ -226,8 +243,8 @@ func OptimizeMedia(params *OptimizationParams) OptimizationResult {
 
 	cmd := exec.Command("ffmpeg", args...)
 
-	// Set memory limit through environment variable
-	cmd.Env = append(os.Environ(), fmt.Sprintf("FFREPORT=file=ffreport.log:level=32"))
+	// Set FFmpeg report location
+	cmd.Env = append(os.Environ(), fmt.Sprintf("FFREPORT=file=%s:level=32", reportFile))
 
 	// Store the command in activeProcesses
 	activeProcesses.Lock()
@@ -313,6 +330,9 @@ func OptimizeMedia(params *OptimizationParams) OptimizationResult {
 			Error:   fmt.Errorf("failed to move output file: %v", err),
 		}
 	}
+
+	// Cleanup report file
+	os.Remove(reportFile)
 
 	return OptimizationResult{
 		Success: true,
