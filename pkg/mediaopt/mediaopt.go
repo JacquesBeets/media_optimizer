@@ -203,7 +203,6 @@ func OptimizeMedia(params *OptimizationParams) OptimizationResult {
 		"-af", "volume=1.5,dynaudnorm=f=150:g=15:p=0.7,loudnorm=I=-16:TP=-1.5:LRA=11",
 		"-metadata:s:a:0", "title=2.1 Optimized",
 		"-threads", fmt.Sprintf("%d", threads),
-		"-max_memory", params.MemoryLimit,
 		"-y",
 		"-nostdin",
 		"-progress", progressFile.Name(),
@@ -211,6 +210,9 @@ func OptimizeMedia(params *OptimizationParams) OptimizationResult {
 	}
 
 	cmd := exec.Command("ffmpeg", args...)
+
+	// Set memory limit through environment variable
+	cmd.Env = append(os.Environ(), fmt.Sprintf("FFREPORT=file=ffreport.log:level=32"))
 
 	// Store the command in activeProcesses
 	activeProcesses.Lock()
