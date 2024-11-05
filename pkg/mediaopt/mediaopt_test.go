@@ -21,10 +21,6 @@ func TestNewDefaultParams(t *testing.T) {
 		t.Errorf("Expected output file %s, got %s", expectedOutput, filepath.Base(params.OutputFile))
 	}
 
-	if params.MemoryLimit != "4G" {
-		t.Errorf("Expected memory limit 4G, got %s", params.MemoryLimit)
-	}
-
 	if !filepath.IsAbs(params.TempDir) {
 		t.Error("Expected absolute path for temp directory")
 	}
@@ -62,43 +58,6 @@ func TestCleanupProcess(t *testing.T) {
 	}
 }
 
-func TestParseProgress(t *testing.T) {
-	tests := []struct {
-		name     string
-		line     string
-		duration float64
-		want     float64
-	}{
-		{
-			name:     "valid progress",
-			line:     "out_time_ms=5000000",
-			duration: 10.0,
-			want:     50.0,
-		},
-		{
-			name:     "invalid line",
-			line:     "invalid=data",
-			duration: 10.0,
-			want:     -1,
-		},
-		{
-			name:     "empty line",
-			line:     "",
-			duration: 10.0,
-			want:     -1,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := parseProgress(tt.line, tt.duration)
-			if got != tt.want {
-				t.Errorf("parseProgress() = %v, want %v", got, tt.want)
-			}
-		})
-	}
-}
-
 func TestOptimizeMedia(t *testing.T) {
 	// Skip if running in CI environment
 	if os.Getenv("CI") != "" {
@@ -117,6 +76,22 @@ func TestOptimizeMedia(t *testing.T) {
 		t.Fatalf("Failed to create test file: %v", err)
 	}
 
+	// Create scripts directory and test script
+	scriptsDir := "scripts"
+	if err := os.MkdirAll(scriptsDir, 0755); err != nil {
+		t.Fatalf("Failed to create scripts directory: %v", err)
+	}
+
+	scriptPath := filepath.Join(scriptsDir, "optimize_media.sh")
+	testScript := `#!/bin/bash
+echo "Processing $1"
+exit 1  # Simulate failure for test
+`
+	if err := os.WriteFile(scriptPath, []byte(testScript), 0755); err != nil {
+		t.Fatalf("Failed to create test script: %v", err)
+	}
+	defer os.Remove(scriptPath)
+
 	params := NewDefaultParams(testFile)
 	params.OnProgress = func(progress float64) {
 		if progress < 0 || progress > 100 {
@@ -126,9 +101,9 @@ func TestOptimizeMedia(t *testing.T) {
 
 	result := OptimizeMedia(params)
 
-	// Since we can't actually process the fake file, we expect an error
+	// Since we're using a test script that returns failure, we expect an error
 	if result.Success {
-		t.Error("Expected failure with fake media file")
+		t.Error("Expected failure with test script")
 	}
 
 	// Test with non-existent file
@@ -139,34 +114,45 @@ func TestOptimizeMedia(t *testing.T) {
 	}
 }
 
-func TestGetFileSize(t *testing.T) {
-	// Create a temporary test file
-	tempFile, err := os.CreateTemp("", "mediaopt_test_*.txt")
-	if err != nil {
-		t.Fatalf("Failed to create temp file: %v", err)
+func TestSanitizeFilename(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name:     "normal filename",
+			input:    "test.mp4",
+			expected: "test.mp4",
+		},
+		{
+			name:     "filename with brackets",
+			input:    "test[1080p].mp4",
+			expected: "test_1080p_.mp4",
+		},
+		{
+			name:     "filename with special chars",
+			input:    "test@#$%^&*.mp4",
+			expected: "test_.mp4",
+		},
+		{
+			name:     "filename with spaces",
+			input:    "test file name.mp4",
+			expected: "test_file_name.mp4",
+		},
+		{
+			name:     "unsupported extension",
+			input:    "test.xyz",
+			expected: "test.mkv",
+		},
 	}
-	defer os.Remove(tempFile.Name())
 
-	// Write some test data
-	testData := []byte("test data")
-	if _, err := tempFile.Write(testData); err != nil {
-		t.Fatalf("Failed to write test data: %v", err)
-	}
-	tempFile.Close()
-
-	// Test getFileSize
-	size, err := getFileSize(tempFile.Name())
-	if err != nil {
-		t.Fatalf("getFileSize failed: %v", err)
-	}
-
-	if size != int64(len(testData)) {
-		t.Errorf("Expected size %d, got %d", len(testData), size)
-	}
-
-	// Test with non-existent file
-	_, err = getFileSize("nonexistent.txt")
-	if err == nil {
-		t.Error("Expected error for non-existent file")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := sanitizeFilename(tt.input)
+			if result != tt.expected {
+				t.Errorf("sanitizeFilename(%s) = %s, want %s", tt.input, result, tt.expected)
+			}
+		})
 	}
 }
