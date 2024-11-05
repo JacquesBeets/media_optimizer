@@ -7,6 +7,11 @@ NICE_LEVEL=10     # Nice level for CPU priority
 IO_CLASS="best-effort"
 IO_PRIORITY=7     # I/O priority (0-7, 7 being lowest)
 
+# Function to sanitize filename
+sanitize_filename() {
+    echo "$1" | sed -e 's/[{}[\]()@#$%^&*]//_/g' -e 's/ /_/g'
+}
+
 # Function to process a single file
 process_file() {
     input_file="$1"
@@ -40,8 +45,16 @@ process_file() {
         audio_stream=$eng_stream
     fi
 
+    # Create sanitized temporary filename
+    temp_filename=$(sanitize_filename "${filename}")
+    temp_output="${temp_dir}/temp_${temp_filename}"
+    
     # Create progress file for monitoring
-    progress_file="${temp_dir}/progress_${basename}.txt"
+    progress_file="${temp_dir}/progress_$(sanitize_filename "${basename}").txt"
+    
+    echo "Processing file: $input_file"
+    echo "Temporary output: $temp_output"
+    echo "Progress file: $progress_file"
     
     # Process with FFmpeg using optimized settings
     ffmpeg -analyzeduration 100M -probesize 100M \
@@ -59,17 +72,18 @@ process_file() {
         -y \
         -nostdin \
         -progress "$progress_file" \
-        "$temp_dir/${filename}.temp"
+        "$temp_output"
 
     # Check if FFmpeg was successful
     if [ $? -eq 0 ]; then
         # Move completed file to final destination
-        mv "$temp_dir/${filename}.temp" "$output_file"
+        mv "$temp_output" "$output_file"
         rm -f "$progress_file"
         echo "Successfully processed: $input_file"
+        echo "Output saved to: $output_file"
         exit 0
     else
-        rm -f "$temp_dir/${filename}.temp" "$progress_file"
+        rm -f "$temp_output" "$progress_file"
         echo "Failed to process: $input_file"
         exit 1
     fi
