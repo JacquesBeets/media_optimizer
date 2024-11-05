@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -40,6 +41,19 @@ var activeProcesses struct {
 
 func init() {
 	activeProcesses.procs = make(map[string]*exec.Cmd)
+}
+
+// sanitizeFilename removes or replaces characters that might cause issues
+func sanitizeFilename(filename string) string {
+	// Replace problematic characters with underscores
+	reg := regexp.MustCompile(`[{}[\]()]+`)
+	sanitized := reg.ReplaceAllString(filename, "_")
+
+	// Remove other potentially problematic characters
+	reg = regexp.MustCompile(`[^a-zA-Z0-9._-]`)
+	sanitized = reg.ReplaceAllString(sanitized, "_")
+
+	return sanitized
 }
 
 // NewDefaultParams creates default optimization parameters
@@ -178,8 +192,9 @@ func OptimizeMedia(params *OptimizationParams) OptimizationResult {
 		threads = threads / 2
 	}
 
-	// Create temp output file
-	tempOutput := filepath.Join(params.TempDir, filepath.Base(params.InputFile)+".temp")
+	// Create sanitized temp output file
+	sanitizedName := sanitizeFilename(filepath.Base(params.InputFile))
+	tempOutput := filepath.Join(params.TempDir, sanitizedName+".temp")
 
 	// Create progress file
 	progressFile, err := os.CreateTemp("", "ffmpeg-progress-*")
