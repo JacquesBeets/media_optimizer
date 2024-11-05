@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -28,8 +29,8 @@ type ProgressCallback func(float64)
 type OptimizationParams struct {
 	InputFile   string
 	OutputFile  string
-	MemoryLimit string // Memory limit per FFmpeg process
-	TempDir     string // Custom temp directory for processing
+	MemoryLimit string
+	TempDir     string
 	OnProgress  ProgressCallback
 }
 
@@ -43,28 +44,65 @@ func init() {
 	activeProcesses.procs = make(map[string]*exec.Cmd)
 }
 
+// logError logs error messages with timestamp and details
+func logError(format string, v ...interface{}) {
+	log.Printf("ERROR: "+format, v...)
+}
+
+// logInfo logs informational messages with timestamp
+func logInfo(format string, v ...interface{}) {
+	log.Printf("INFO: "+format, v...)
+}
+
+// getEnglishAudioStream gets the index of the English audio stream
+func getEnglishAudioStream(inputFile string) (int, error) {
+	cmd := exec.Command("ffprobe",
+		"-v", "quiet",
+		"-print_format", "json",
+		"-show_streams",
+		"-select_streams", "a",
+		inputFile)
+
+	output, err := cmd.Output()
+	if err != nil {
+		return 0, fmt.Errorf("failed to get audio streams: %v", err)
+	}
+
+	// Look for English stream in the output
+	outputStr := string(output)
+	if strings.Contains(strings.ToLower(outputStr), "language\":\"eng") {
+		// Parse the stream index from the output
+		re := regexp.MustCompile(`"index":(\d+).*?"language":"eng"`)
+		matches := re.FindStringSubmatch(outputStr)
+		if len(matches) > 1 {
+			index, err := strconv.Atoi(matches[1])
+			if err == nil {
+				return index, nil
+			}
+		}
+	}
+
+	// If no English stream found, return the first audio stream
+	return 0, nil
+}
+
 // sanitizeFilename removes or replaces characters that might cause issues
 func sanitizeFilename(filename string) string {
-	// Extract extension
 	ext := filepath.Ext(filename)
 	base := strings.TrimSuffix(filename, ext)
 
-	// Replace problematic characters with underscores
 	reg := regexp.MustCompile(`[{}[\]()]+`)
 	sanitized := reg.ReplaceAllString(base, "_")
 
-	// Remove other potentially problematic characters
 	reg = regexp.MustCompile(`[^a-zA-Z0-9._-]`)
 	sanitized = reg.ReplaceAllString(sanitized, "_")
 
-	// Clean up multiple underscores
 	reg = regexp.MustCompile(`_+`)
 	sanitized = reg.ReplaceAllString(sanitized, "_")
 
-	// Ensure the extension is lowercase and clean
 	ext = strings.ToLower(ext)
 	if ext != ".mkv" && ext != ".mp4" && ext != ".avi" {
-		ext = ".mkv" // Default to mkv if extension is not recognized
+		ext = ".mkv"
 	}
 
 	return sanitized + ext
@@ -85,7 +123,6 @@ func NewDefaultParams(inputFile string) *OptimizationParams {
 	}
 }
 
-// getDuration gets the duration of the input file in seconds
 func getDuration(inputFile string) (float64, error) {
 	cmd := exec.Command("ffprobe",
 		"-v", "error",
@@ -106,7 +143,6 @@ func getDuration(inputFile string) (float64, error) {
 	return duration, nil
 }
 
-// getFileSize gets the size of the file in bytes
 func getFileSize(path string) (int64, error) {
 	info, err := os.Stat(path)
 	if err != nil {
@@ -115,7 +151,6 @@ func getFileSize(path string) (int64, error) {
 	return info.Size(), nil
 }
 
-// parseProgress parses FFmpeg progress output
 func parseProgress(line string, duration float64) float64 {
 	if strings.HasPrefix(line, "out_time_ms=") {
 		timeStr := strings.TrimPrefix(line, "out_time_ms=")
@@ -129,13 +164,13 @@ func parseProgress(line string, duration float64) float64 {
 	return -1
 }
 
-// CleanupProcess ensures the FFmpeg process is properly terminated
 func CleanupProcess(inputFile string) {
 	activeProcesses.Lock()
 	defer activeProcesses.Unlock()
 
 	if cmd, exists := activeProcesses.procs[inputFile]; exists {
 		if cmd.Process != nil {
+			logInfo("Cleaning up process for %s", inputFile)
 			cmd.Process.Signal(syscall.SIGTERM)
 			done := make(chan error)
 			go func() {
@@ -143,8 +178,9 @@ func CleanupProcess(inputFile string) {
 			}()
 			select {
 			case <-done:
-				// Process terminated gracefully
+				logInfo("Process terminated gracefully")
 			case <-time.After(5 * time.Second):
+				logInfo("Process killed after timeout")
 				cmd.Process.Kill()
 			}
 		}
@@ -152,19 +188,21 @@ func CleanupProcess(inputFile string) {
 	}
 }
 
-// setPriority sets process priority and I/O priority
 func setPriority(pid int) {
-	// Set CPU priority (nice level)
 	niceCmd := exec.Command("nice", "-n", "10", "--", strconv.Itoa(pid))
-	niceCmd.Run()
+	if err := niceCmd.Run(); err != nil {
+		logError("Failed to set nice level: %v", err)
+	}
 
-	// Set I/O priority
 	ioniceCmd := exec.Command("ionice", "-c", "2", "-n", "7", "-p", strconv.Itoa(pid))
-	ioniceCmd.Run()
+	if err := ioniceCmd.Run(); err != nil {
+		logError("Failed to set I/O priority: %v", err)
+	}
 }
 
-// OptimizeMedia processes the media file for better quality and compression
 func OptimizeMedia(params *OptimizationParams) OptimizationResult {
+	logInfo("Starting optimization for %s", params.InputFile)
+
 	if _, err := os.Stat(params.InputFile); os.IsNotExist(err) {
 		return OptimizationResult{
 			Success: false,
@@ -172,7 +210,6 @@ func OptimizeMedia(params *OptimizationParams) OptimizationResult {
 		}
 	}
 
-	// Create temp directory if it doesn't exist
 	if err := os.MkdirAll(params.TempDir, 0755); err != nil {
 		return OptimizationResult{
 			Success: false,
@@ -180,10 +217,16 @@ func OptimizeMedia(params *OptimizationParams) OptimizationResult {
 		}
 	}
 
-	// Cleanup any existing process for this file
 	CleanupProcess(params.InputFile)
 
-	// Get video duration for progress calculation
+	// Get English audio stream index
+	audioStreamIndex, err := getEnglishAudioStream(params.InputFile)
+	if err != nil {
+		logError("Failed to get English audio stream: %v", err)
+		audioStreamIndex = 0 // Fallback to first audio stream
+	}
+	logInfo("Using audio stream index: %d", audioStreamIndex)
+
 	duration, err := getDuration(params.InputFile)
 	if err != nil {
 		return OptimizationResult{
@@ -192,7 +235,6 @@ func OptimizeMedia(params *OptimizationParams) OptimizationResult {
 		}
 	}
 
-	// Calculate optimal thread count based on file size
 	fileSize, err := getFileSize(params.InputFile)
 	if err != nil {
 		return OptimizationResult{
@@ -202,15 +244,14 @@ func OptimizeMedia(params *OptimizationParams) OptimizationResult {
 	}
 
 	threads := runtime.NumCPU()
-	if fileSize < 10*1024*1024*1024 { // Less than 10GB
+	if fileSize < 10*1024*1024*1024 {
 		threads = threads / 2
 	}
+	logInfo("Using %d threads for processing", threads)
 
-	// Create sanitized temp output file
 	sanitizedName := sanitizeFilename(filepath.Base(params.InputFile))
 	tempOutput := filepath.Join(params.TempDir, fmt.Sprintf("temp_%d%s", time.Now().UnixNano(), filepath.Ext(sanitizedName)))
 
-	// Create progress file
 	progressFile, err := os.CreateTemp(params.TempDir, "ffmpeg-progress-*.txt")
 	if err != nil {
 		return OptimizationResult{
@@ -221,19 +262,18 @@ func OptimizeMedia(params *OptimizationParams) OptimizationResult {
 	defer os.Remove(progressFile.Name())
 	defer progressFile.Close()
 
-	// Create FFmpeg report file in temp directory
 	reportFile := filepath.Join(params.TempDir, fmt.Sprintf("ffreport_%d.log", time.Now().UnixNano()))
 
-	// Build FFmpeg command with optimized parameters
 	args := []string{
 		"-i", params.InputFile,
 		"-map", "0:v:0", "-c:v", "copy",
-		"-map", "0:a:0",
+		"-map", fmt.Sprintf("0:a:%d", audioStreamIndex),
 		"-c:a", "ac3",
 		"-ac", "2",
 		"-b:a", "384k",
 		"-af", "volume=1.5,dynaudnorm=f=150:g=15:p=0.7,loudnorm=I=-16:TP=-1.5:LRA=11",
 		"-metadata:s:a:0", "title=2.1 Optimized",
+		"-metadata:s:a:0", "language=eng",
 		"-threads", fmt.Sprintf("%d", threads),
 		"-y",
 		"-nostdin",
@@ -242,16 +282,14 @@ func OptimizeMedia(params *OptimizationParams) OptimizationResult {
 	}
 
 	cmd := exec.Command("ffmpeg", args...)
+	logInfo("Executing FFmpeg command: %v", cmd.Args)
 
-	// Set FFmpeg report location
 	cmd.Env = append(os.Environ(), fmt.Sprintf("FFREPORT=file=%s:level=32", reportFile))
 
-	// Store the command in activeProcesses
 	activeProcesses.Lock()
 	activeProcesses.procs[params.InputFile] = cmd
 	activeProcesses.Unlock()
 
-	// Create pipe for stderr to capture FFmpeg output
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
 		return OptimizationResult{
@@ -260,7 +298,6 @@ func OptimizeMedia(params *OptimizationParams) OptimizationResult {
 		}
 	}
 
-	// Start command
 	if err := cmd.Start(); err != nil {
 		return OptimizationResult{
 			Success: false,
@@ -268,10 +305,14 @@ func OptimizeMedia(params *OptimizationParams) OptimizationResult {
 		}
 	}
 
-	// Set process priority after start
 	if cmd.Process != nil {
 		setPriority(cmd.Process.Pid)
+		logInfo("Process started with PID: %d", cmd.Process.Pid)
 	}
+
+	lastProgress := 0.0
+	lastProgressTime := time.Now()
+	progressStallTimeout := 5 * time.Minute
 
 	// Monitor progress file
 	go func() {
@@ -287,12 +328,23 @@ func OptimizeMedia(params *OptimizationParams) OptimizationResult {
 				continue
 			}
 			if err != nil {
+				logError("Error reading progress: %v", err)
 				break
 			}
 
 			progress := parseProgress(strings.TrimSpace(line), duration)
-			if progress >= 0 && params.OnProgress != nil {
-				params.OnProgress(progress)
+			if progress >= 0 {
+				if progress > lastProgress {
+					lastProgress = progress
+					lastProgressTime = time.Now()
+				} else if time.Since(lastProgressTime) > progressStallTimeout {
+					logError("Progress stalled for more than %v minutes", progressStallTimeout.Minutes())
+					cmd.Process.Signal(syscall.SIGTERM)
+					break
+				}
+				if params.OnProgress != nil {
+					params.OnProgress(progress)
+				}
 			}
 		}
 	}()
@@ -301,20 +353,22 @@ func OptimizeMedia(params *OptimizationParams) OptimizationResult {
 	go func() {
 		scanner := bufio.NewScanner(stderr)
 		for scanner.Scan() {
-			fmt.Println("FFmpeg:", scanner.Text())
+			text := scanner.Text()
+			fmt.Println("FFmpeg:", text)
+			if strings.Contains(strings.ToLower(text), "error") {
+				logError("FFmpeg error: %s", text)
+			}
 		}
 	}()
 
-	// Wait for completion
 	err = cmd.Wait()
 
-	// Clean up process tracking
 	activeProcesses.Lock()
 	delete(activeProcesses.procs, params.InputFile)
 	activeProcesses.Unlock()
 
 	if err != nil {
-		// Cleanup temp file on error
+		logError("FFmpeg process failed: %v", err)
 		os.Remove(tempOutput)
 		return OptimizationResult{
 			Success: false,
@@ -322,8 +376,8 @@ func OptimizeMedia(params *OptimizationParams) OptimizationResult {
 		}
 	}
 
-	// Move temp file to final destination
 	if err := os.Rename(tempOutput, params.OutputFile); err != nil {
+		logError("Failed to move output file: %v", err)
 		os.Remove(tempOutput)
 		return OptimizationResult{
 			Success: false,
@@ -331,8 +385,8 @@ func OptimizeMedia(params *OptimizationParams) OptimizationResult {
 		}
 	}
 
-	// Cleanup report file
 	os.Remove(reportFile)
+	logInfo("Successfully completed optimization for %s", params.InputFile)
 
 	return OptimizationResult{
 		Success: true,
