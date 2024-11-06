@@ -24,48 +24,43 @@ find_eng_audio_stream() {
     
     # Debug: Print full stream information
     echo "DEBUG: Full stream information:" >&2
-    echo "$stream_info" >&2
+    echo "$stream_info" | jq '.' >&2
     
-    # Try to find English audio stream
-    local eng_stream
+    # Find audio streams
+    local audio_streams
+    audio_streams=$(echo "$stream_info" | jq -r '.streams[] | select(.codec_type == "audio") | .index' 2>/dev/null)
     
-    # First, look for stream with index 2 (known English stream)
-    eng_stream=$(echo "$stream_info" | grep -q '"index": 2' && echo 2)
+    echo "DEBUG: Found audio stream indices: $audio_streams" >&2
     
-    # If not found, look for streams with English language tag
-    if [ -z "$eng_stream" ]; then
-        eng_stream=$(echo "$stream_info" | grep -q '"language": "eng"' && 
-            echo "$stream_info" | grep -B10 '"language": "eng"' | 
-            grep '"index":' | 
-            head -n 1 | 
-            sed -E 's/.*"index": *([0-9]+).*/\1/')
+    # Prioritize stream selection
+    local selected_stream
+    
+    # First, look for stream with index 2 and 'eng' language
+    selected_stream=$(echo "$stream_info" | jq -r '.streams[] | select(.index == 2 and .tags.language == "eng") | .index' 2>/dev/null)
+    
+    # If not found, look for any stream with 'eng' language
+    if [ -z "$selected_stream" ]; then
+        selected_stream=$(echo "$stream_info" | jq -r '.streams[] | select(.tags.language == "eng") | .index' 2>/dev/null | head -n 1)
     fi
     
-    # If still not found, look for streams with "English" in title
-    if [ -z "$eng_stream" ]; then
-        eng_stream=$(echo "$stream_info" | grep -q '"title": *".*[Ee]nglish' && 
-            echo "$stream_info" | grep -B10 '"title": *".*[Ee]nglish' | 
-            grep '"index":' | 
-            head -n 1 | 
-            sed -E 's/.*"index": *([0-9]+).*/\1/')
+    # If still not found, look for stream with "English" in title
+    if [ -z "$selected_stream" ]; then
+        selected_stream=$(echo "$stream_info" | jq -r '.streams[] | select(.tags.title | ascii_downcase | contains("english")) | .index' 2>/dev/null | head -n 1)
     fi
     
     # If still not found, use first audio stream
-    if [ -z "$eng_stream" ]; then
-        eng_stream=$(echo "$stream_info" | grep -B10 '"codec_type": *"audio"' | 
-            grep '"index":' | 
-            head -n 1 | 
-            sed -E 's/.*"index": *([0-9]+).*/\1/')
+    if [ -z "$selected_stream" ]; then
+        selected_stream=$(echo "$audio_streams" | head -n 1)
     fi
     
     # Final check
-    if [ -z "$eng_stream" ]; then
+    if [ -z "$selected_stream" ]; then
         echo "Error: No audio streams found" >&2
         return 1
     fi
     
-    echo "DEBUG: Selected audio stream index: $eng_stream" >&2
-    echo "$eng_stream"
+    echo "DEBUG: Selected audio stream index: $selected_stream" >&2
+    echo "$selected_stream"
     return 0
 }
 
@@ -137,7 +132,7 @@ process_file() {
         -analyzeduration 100M -probesize 100M \
         -i "$input_file" \
         -map 0:v:0 -c:v copy \
-        -map "0:a:${audio_stream}" \
+        -map "0:a:${audio_stream}?" \
         -c:a ac3 \
         -ac 2 \
         -b:a 384k \
