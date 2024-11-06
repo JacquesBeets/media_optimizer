@@ -18,36 +18,55 @@ sanitize_filename() {
 find_eng_audio_stream() {
     local input_file="$1"
     
-    # First, try to get stream information without jq
+    # Get stream information
     local stream_info
-    stream_info=$(ffprobe -v error -show_entries stream=index,codec_type,tags::language,tags::title -of csv=p=0 "$input_file")
+    stream_info=$(ffprobe -v error -show_streams -print_format json "$input_file")
     
-    echo "DEBUG: Stream information:"
-    echo "$stream_info"
+    # Debug: Print full stream information
+    echo "DEBUG: Full stream information:" >&2
+    echo "$stream_info" >&2
     
-    # Look for English audio stream
-    local eng_streams
-    eng_streams=$(echo "$stream_info" | grep "audio" | grep -E "eng|english" | cut -d, -f1)
+    # Try to find English audio stream
+    local eng_stream
     
-    # If no English streams found, fallback to first audio stream
-    if [ -z "$eng_streams" ]; then
-        eng_streams=$(echo "$stream_info" | grep "audio" | head -n 1 | cut -d, -f1)
+    # First, look for stream with index 2 (known English stream)
+    eng_stream=$(echo "$stream_info" | grep -q '"index": 2' && echo 2)
+    
+    # If not found, look for streams with English language tag
+    if [ -z "$eng_stream" ]; then
+        eng_stream=$(echo "$stream_info" | grep -q '"language": "eng"' && 
+            echo "$stream_info" | grep -B10 '"language": "eng"' | 
+            grep '"index":' | 
+            head -n 1 | 
+            sed -E 's/.*"index": *([0-9]+).*/\1/')
     fi
     
-    # Prefer stream 2 if it exists
-    if echo "$stream_info" | grep -q "2,eng,DD 5.1 English"; then
-        echo 2
-        return 0
+    # If still not found, look for streams with "English" in title
+    if [ -z "$eng_stream" ]; then
+        eng_stream=$(echo "$stream_info" | grep -q '"title": *".*[Ee]nglish' && 
+            echo "$stream_info" | grep -B10 '"title": *".*[Ee]nglish' | 
+            grep '"index":' | 
+            head -n 1 | 
+            sed -E 's/.*"index": *([0-9]+).*/\1/')
     fi
     
-    # Use first found stream
-    if [ -n "$eng_streams" ]; then
-        echo "$eng_streams" | head -n 1
-        return 0
+    # If still not found, use first audio stream
+    if [ -z "$eng_stream" ]; then
+        eng_stream=$(echo "$stream_info" | grep -B10 '"codec_type": *"audio"' | 
+            grep '"index":' | 
+            head -n 1 | 
+            sed -E 's/.*"index": *([0-9]+).*/\1/')
     fi
     
-    echo "Error: No audio streams found" >&2
-    return 1
+    # Final check
+    if [ -z "$eng_stream" ]; then
+        echo "Error: No audio streams found" >&2
+        return 1
+    fi
+    
+    echo "DEBUG: Selected audio stream index: $eng_stream" >&2
+    echo "$eng_stream"
+    return 0
 }
 
 # Function to process a single file
@@ -72,7 +91,7 @@ process_file() {
     if [ "$file_size" -gt 10737418240 ]; then  # 10GB
         thread_count=$THREADS
     else
-        thread_count=$((THREADS - 1))
+        thread_count=$((THREADS / 2))
     fi
 
     # Find English audio stream
@@ -81,6 +100,8 @@ process_file() {
     
     if [ $stream_status -ne 0 ]; then
         echo "Error: No suitable audio stream found in $input_file"
+        # List all streams for debugging
+        ffprobe -v error -show_streams -print_format json "$input_file"
         exit 1
     fi
     
