@@ -3,12 +3,11 @@ package mediaopt
 import (
 	"bufio"
 	"fmt"
-	"io"
 	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 )
@@ -51,28 +50,6 @@ func init() {
 	log.SetOutput(logFile)
 }
 
-// sanitizeFilename removes or replaces characters that might cause issues
-func sanitizeFilename(filename string) string {
-	ext := filepath.Ext(filename)
-	base := strings.TrimSuffix(filename, ext)
-
-	reg := regexp.MustCompile(`[{}[\]()]+`)
-	sanitized := reg.ReplaceAllString(base, "_")
-
-	reg = regexp.MustCompile(`[^a-zA-Z0-9._-]`)
-	sanitized = reg.ReplaceAllString(sanitized, "_")
-
-	reg = regexp.MustCompile(`_+`)
-	sanitized = reg.ReplaceAllString(sanitized, "_")
-
-	ext = strings.ToLower(ext)
-	if ext != ".mkv" && ext != ".mp4" && ext != ".avi" {
-		ext = ".mkv"
-	}
-
-	return sanitized + ext
-}
-
 // NewDefaultParams creates default optimization parameters
 func NewDefaultParams(inputFile string) *OptimizationParams {
 	ext := filepath.Ext(inputFile)
@@ -95,7 +72,13 @@ func CleanupProcess(inputFile string) {
 	if cmd, exists := activeProcesses.procs[inputFile]; exists {
 		if cmd.Process != nil {
 			logInfo("Cleaning up process for %s", inputFile)
+			// Kill the process group to ensure all child processes are terminated
+			if pgid, err := os.FindProcess(-cmd.Process.Pid); err == nil {
+				pgid.Kill()
+			}
 			cmd.Process.Kill()
+			// Wait for process to finish
+			cmd.Wait()
 		}
 		delete(activeProcesses.procs, inputFile)
 	}
@@ -159,10 +142,6 @@ func OptimizeMedia(params *OptimizationParams) OptimizationResult {
 	// Execute the optimization script
 	cmd := exec.Command("/bin/bash", scriptPath, params.InputFile)
 
-	// Set up progress monitoring
-	progressFile := filepath.Join(params.TempDir, fmt.Sprintf("progress_%s.txt",
-		strings.TrimSuffix(filepath.Base(params.InputFile), filepath.Ext(params.InputFile))))
-
 	// Track the process
 	activeProcesses.Lock()
 	activeProcesses.procs[params.InputFile] = cmd
@@ -200,11 +179,28 @@ func OptimizeMedia(params *OptimizationParams) OptimizationResult {
 		}
 	}
 
+	// Create channels for monitoring
+	doneChan := make(chan struct{})
+	progressChan := make(chan float64)
+
 	// Monitor stdout
 	go func() {
 		scanner := bufio.NewScanner(stdout)
+		var totalDuration float64
 		for scanner.Scan() {
-			logInfo("Script output: %s", scanner.Text())
+			text := scanner.Text()
+			logInfo("Script output: %s", text)
+			if strings.HasPrefix(text, "total_duration=") {
+				durationStr := strings.TrimPrefix(text, "total_duration=")
+				totalDuration, _ = strconv.ParseFloat(durationStr, 64)
+			}
+			if strings.HasPrefix(text, "out_time_ms=") && totalDuration > 0 {
+				timeStr := strings.TrimPrefix(text, "out_time_ms=")
+				timeMs, _ := strconv.ParseInt(timeStr, 10, 64)
+				timeSec := float64(timeMs) / 1000000.0
+				progress := (timeSec / totalDuration) * 100
+				progressChan <- progress
+			}
 		}
 	}()
 
@@ -220,27 +216,11 @@ func OptimizeMedia(params *OptimizationParams) OptimizationResult {
 	if params.OnProgress != nil {
 		go func() {
 			for {
-				if _, err := os.Stat(progressFile); err == nil {
-					file, err := os.Open(progressFile)
-					if err == nil {
-						reader := bufio.NewReader(file)
-						for {
-							line, err := reader.ReadString('\n')
-							if err == io.EOF {
-								break
-							}
-							if strings.HasPrefix(line, "out_time_ms=") {
-								// Parse progress and call callback
-								// This is a simplified progress calculation
-								params.OnProgress(50.0) // You might want to implement more accurate progress
-							}
-						}
-						file.Close()
-					}
-				}
-				// Check if process is still running
-				if cmd.ProcessState != nil && cmd.ProcessState.Exited() {
-					break
+				select {
+				case progress := <-progressChan:
+					params.OnProgress(progress)
+				case <-doneChan:
+					return
 				}
 			}
 		}()
@@ -248,6 +228,8 @@ func OptimizeMedia(params *OptimizationParams) OptimizationResult {
 
 	// Wait for completion
 	err = cmd.Wait()
+	close(doneChan)
+
 	if err != nil {
 		return OptimizationResult{
 			Success: false,

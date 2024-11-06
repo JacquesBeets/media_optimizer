@@ -7,14 +7,11 @@ NICE_LEVEL=10     # Nice level for CPU priority
 IO_CLASS="best-effort"
 IO_PRIORITY=7     # I/O priority (0-7, 7 being lowest)
 
-# Function to sanitize filename
+# Function to sanitize filename for temporary files
 sanitize_filename() {
     local filename="$1"
-    # First, escape the filename for sed
-    filename=$(echo "$filename" | sed 's/[][\*\^\&\$\?\*(){}#|]/\\&/g')
-    # Then remove/replace special characters
-    filename=$(echo "$filename" | tr -d '{}[]()' | tr ' ' '_')
-    echo "$filename"
+    # Remove special characters and replace spaces with underscores
+    echo "$filename" | tr -cd '[:alnum:]._-' | tr ' ' '_'
 }
 
 # Function to process a single file
@@ -51,18 +48,33 @@ process_file() {
     fi
 
     # Create sanitized temporary filename
-    temp_basename=$(sanitize_filename "${basename}")
-    temp_output="${temp_dir}/temp_${temp_basename}.${extension}"
-    
-    # Create progress file for monitoring
-    progress_file="${temp_dir}/progress_${temp_basename}.txt"
+    temp_id="$(date +%s%N)"
+    temp_output="${temp_dir}/temp_${temp_id}.${extension}"
+    progress_file="${temp_dir}/progress_${temp_id}.txt"
     
     echo "Processing file: $input_file"
     echo "Temporary output: $temp_output"
     echo "Progress file: $progress_file"
     
+    # Function to cleanup on exit
+    cleanup() {
+        local exit_code=$?
+        echo "Cleaning up..."
+        # Kill any remaining ffmpeg processes
+        pkill -P $$
+        # Remove temporary files
+        rm -f "$temp_output" "$progress_file"
+        exit $exit_code
+    }
+    trap cleanup EXIT INT TERM
+
+    # Get duration for progress calculation
+    duration=$(ffprobe -v quiet -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "$input_file")
+    echo "total_duration=$duration" > "$progress_file"
+    
     # Process with FFmpeg using optimized settings
-    ffmpeg -analyzeduration 100M -probesize 100M \
+    ffmpeg -nostdin -y \
+        -analyzeduration 100M -probesize 100M \
         -i "$input_file" \
         -map 0:v:0 -c:v copy \
         -map "0:a:${audio_stream}" \
@@ -74,21 +86,16 @@ process_file() {
         -metadata:s:a:0 language=eng \
         -movflags +faststart \
         -threads "$thread_count" \
-        -y \
-        -nostdin \
         -progress "$progress_file" \
-        "$temp_output"
+        "$temp_output" || exit 1
 
-    # Check if FFmpeg was successful
-    if [ $? -eq 0 ]; then
-        # Move completed file to final destination
+    # Move the file to final destination
+    if [ -f "$temp_output" ]; then
         mv "$temp_output" "$output_file"
-        rm -f "$progress_file"
         echo "Successfully processed: $input_file"
         echo "Output saved to: $output_file"
         exit 0
     else
-        rm -f "$temp_output" "$progress_file"
         echo "Failed to process: $input_file"
         exit 1
     fi
