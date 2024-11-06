@@ -26,35 +26,35 @@ find_eng_audio_stream() {
     echo "DEBUG: Full stream information:" >&2
     echo "$stream_info" >&2
     
-    # Explicitly check for stream 2 with English language
+    # Detect audio streams
+    local audio_streams
+    audio_streams=$(echo "$stream_info" | grep -o '"index": *[0-9]*.*"codec_type": *"audio"' | grep -o '"index": *[0-9]*' | grep -o '[0-9]*')
+    
+    echo "DEBUG: Found audio stream indices: $audio_streams" >&2
+    
+    # Prioritize stream selection
     local selected_stream
+    
+    # First, look for stream 2 with English language
     selected_stream=$(echo "$stream_info" | grep -q '"index": *2.*"language": *"eng"' && echo 2)
     
-    # If stream 2 not found, look for any English audio stream
+    # If not found, look for any stream with 'eng' language
     if [ -z "$selected_stream" ]; then
         selected_stream=$(echo "$stream_info" | 
-            grep -o '"index": *[0-9]*.*"codec_type": *"audio".*"language": *"eng"' | 
-            head -n 1 | 
-            grep -o '"index": *[0-9]*' | 
-            grep -o '[0-9]*')
+            awk -F'"' '/"index": *[0-9]+.*"codec_type": *"audio".*"language": *"eng"/ {print $4}' | 
+            head -n 1)
     fi
     
     # If still not found, look for stream with "English" in title
     if [ -z "$selected_stream" ]; then
         selected_stream=$(echo "$stream_info" | 
-            grep -o '"index": *[0-9]*.*"codec_type": *"audio".*"title": *".*[Ee]nglish' | 
-            head -n 1 | 
-            grep -o '"index": *[0-9]*' | 
-            grep -o '[0-9]*')
+            awk -F'"' '/"index": *[0-9]+.*"codec_type": *"audio".*"title": *".*[Ee]nglish/ {print $4}' | 
+            head -n 1)
     fi
     
     # If still not found, use first audio stream
     if [ -z "$selected_stream" ]; then
-        selected_stream=$(echo "$stream_info" | 
-            grep -o '"index": *[0-9]*.*"codec_type": *"audio"' | 
-            head -n 1 | 
-            grep -o '"index": *[0-9]*' | 
-            grep -o '[0-9]*')
+        selected_stream=$(echo "$audio_streams" | head -n 1)
     fi
     
     # Final check
