@@ -21,36 +21,33 @@ find_eng_audio_stream() {
     stream_info=$(ffprobe -v quiet -print_format json -show_streams -i "$input_file")
     
     # Try to find English audio stream
-    local eng_index
     # First, look for eng language tag
+    local eng_index
     eng_index=$(echo "$stream_info" | jq -r '.streams[] | select(.codec_type=="audio" and .tags.language=="eng") | .index' 2>/dev/null | head -n 1)
     
     if [ -n "$eng_index" ]; then
-        echo "Found English audio stream by language tag: $eng_index"
-        echo "$eng_index"
-        return
+        echo "Found English audio stream by language tag at index $eng_index"
+        return "$eng_index"
     fi
     
     # Then look for English in title
     eng_index=$(echo "$stream_info" | jq -r '.streams[] | select(.codec_type=="audio" and (.tags.title | ascii_downcase | contains("english"))) | .index' 2>/dev/null | head -n 1)
     
     if [ -n "$eng_index" ]; then
-        echo "Found English audio stream by title: $eng_index"
-        echo "$eng_index"
-        return
+        echo "Found English audio stream by title at index $eng_index"
+        return "$eng_index"
     fi
     
     # Finally, just use the first audio stream
     eng_index=$(echo "$stream_info" | jq -r '.streams[] | select(.codec_type=="audio") | .index' 2>/dev/null | head -n 1)
     
     if [ -n "$eng_index" ]; then
-        echo "Using first available audio stream: $eng_index"
-        echo "$eng_index"
-        return
+        echo "Using first available audio stream at index $eng_index"
+        return "$eng_index"
     fi
     
-    echo "No audio stream found, using 0"
-    echo "0"
+    echo "No audio stream found, using index 1"
+    return 1
 }
 
 # Function to process a single file
@@ -79,7 +76,8 @@ process_file() {
     fi
 
     # Find English audio stream
-    audio_stream=$(find_eng_audio_stream "$input_file")
+    find_eng_audio_stream "$input_file"
+    audio_stream=$?
     echo "Using audio stream index: $audio_stream"
 
     # Create sanitized temporary filename
@@ -109,14 +107,14 @@ process_file() {
     
     # Process with FFmpeg using optimized settings
     ffmpeg -nostdin -y \
-        -analyzeduration 200M -probesize 200M \
+        -analyzeduration 100M -probesize 100M \
         -i "$input_file" \
         -map 0:v:0 -c:v copy \
-        -map "0:a:${audio_stream}" \
-        -c:a:0 ac3 \
-        -ac:a:0 2 \
-        -b:a:0 384k \
-        -filter:a:0 "volume=1.5,dynaudnorm=f=150:g=15:p=0.7,loudnorm=I=-16:TP=-1.5:LRA=11" \
+        -map 0:a:$audio_stream \
+        -c:a ac3 \
+        -ac 2 \
+        -b:a 384k \
+        -filter:a "volume=1.5,dynaudnorm=f=150:g=15:p=0.7,loudnorm=I=-16:TP=-1.5:LRA=11" \
         -metadata:s:a:0 title="2.1 Optimized" \
         -metadata:s:a:0 language=eng \
         -movflags +faststart \
