@@ -40,29 +40,28 @@ find_eng_audio_stream() {
     echo "$stream_details" >&2
     
     # Prioritize stream selection
-    local selected_stream
+    local selected_stream=""
     
-    # First, look for stream 2 with English language or title
-    selected_stream=$(echo "$stream_info" | grep -q '"index": *2.*"language": *"eng"' && echo 2)
+    # First, look for stream with English language
+    for stream in $audio_streams; do
+        local lang_check=$(echo "$stream_info" | grep -E "\"index\": *$stream.*\"language\": *\"eng\"")
+        local title_check=$(echo "$stream_info" | grep -E "\"index\": *$stream.*\"title\": *\".*[Ee]nglish\"")
+        
+        if [ -n "$lang_check" ] || [ -n "$title_check" ]; then
+            selected_stream=$stream
+            break
+        fi
+    done
     
-    # If not found, look for stream 2 with English title
+    # If no English stream found, prefer 5.1 or stereo streams
     if [ -z "$selected_stream" ]; then
-        selected_stream=$(echo "$stream_info" | grep -q '"index": *2.*"title": *".*[Ee]nglish"' && echo 2)
-    fi
-    
-    # If still not found, look for any stream with 'eng' language
-    if [ -z "$selected_stream" ]; then
-        selected_stream=$(echo "$stream_info" | grep -o '"index": *[0-9]*.*"language": *"eng"' | head -n 1 | grep -o '"index": *[0-9]*' | grep -o '[0-9]*')
-    fi
-    
-    # If still not found, look for stream with "English" in title
-    if [ -z "$selected_stream" ]; then
-        selected_stream=$(echo "$stream_info" | grep -o '"index": *[0-9]*.*"title": *".*[Ee]nglish"' | head -n 1 | grep -o '"index": *[0-9]*' | grep -o '[0-9]*')
-    fi
-    
-    # If still not found, prefer 5.1 or stereo streams
-    if [ -z "$selected_stream" ]; then
-        selected_stream=$(echo "$stream_info" | grep -o '"index": *[0-9]*.*"channels": *\(6\|2\)' | head -n 1 | grep -o '"index": *[0-9]*' | grep -o '[0-9]*')
+        for stream in $audio_streams; do
+            local channel_check=$(echo "$stream_info" | grep -E "\"index\": *$stream.*\"channels\": *\(6\|2\)")
+            if [ -n "$channel_check" ]; then
+                selected_stream=$stream
+                break
+            fi
+        done
     fi
     
     # Final fallback: first audio stream
