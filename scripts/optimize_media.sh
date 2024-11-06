@@ -18,45 +18,44 @@ sanitize_filename() {
 find_eng_audio_stream() {
     local input_file="$1"
     local stream_info
-    stream_info=$(ffprobe -v quiet -print_format json -show_streams -i "$input_file")
     
-    # Specific check for stream #0:2 (English AC3 stream)
-    local eng_stream=$(echo "$stream_info" | jq -r '.streams[] | select(.index==2 and .codec_type=="audio" and .tags.language=="eng") | .index' 2>/dev/null)
+    # Get full stream information with verbose output
+    stream_info=$(ffprobe -v verbose -print_format json -show_streams -i "$input_file")
     
-    if [ -n "$eng_stream" ]; then
-        echo "Found predefined English audio stream at index 2"
-        echo "$eng_stream"
-        return
+    # Debug: Print full stream information
+    echo "DEBUG: Full stream information:" >&2
+    echo "$stream_info" | jq '.' >&2
+    
+    # Try multiple methods to find English audio stream
+    local eng_streams
+    
+    # Method 1: Exact match for English language
+    eng_streams=$(echo "$stream_info" | jq -r '.streams[] | 
+        select(.codec_type == "audio" and 
+               (.tags.language == "eng" or 
+                (.tags.title | ascii_downcase | contains("english")))) | 
+        .index' 2>/dev/null)
+    
+    # If no streams found by language, try broader search
+    if [ -z "$eng_streams" ]; then
+        eng_streams=$(echo "$stream_info" | jq -r '.streams[] | 
+            select(.codec_type == "audio") | .index' 2>/dev/null)
     fi
     
-    # Try to find English audio stream by language tag
-    eng_stream=$(echo "$stream_info" | jq -r '.streams[] | select(.codec_type=="audio" and .tags.language=="eng") | .index' 2>/dev/null | head -n 1)
+    # Debug: Print found streams
+    echo "DEBUG: Found audio streams: $eng_streams" >&2
     
-    if [ -n "$eng_stream" ]; then
-        echo "Found English audio stream by language tag at index $eng_stream"
-        echo "$eng_stream"
-        return
+    # Select the first stream if multiple found
+    local selected_stream
+    selected_stream=$(echo "$eng_streams" | head -n 1)
+    
+    if [ -n "$selected_stream" ]; then
+        echo "DEBUG: Selected stream index: $selected_stream" >&2
+        echo "$selected_stream"
+        return 0
     fi
     
-    # Then look for English in title
-    eng_stream=$(echo "$stream_info" | jq -r '.streams[] | select(.codec_type=="audio" and (.tags.title | ascii_downcase | contains("english"))) | .index' 2>/dev/null | head -n 1)
-    
-    if [ -n "$eng_stream" ]; then
-        echo "Found English audio stream by title at index $eng_stream"
-        echo "$eng_stream"
-        return
-    fi
-    
-    # Finally, just use the first audio stream
-    eng_stream=$(echo "$stream_info" | jq -r '.streams[] | select(.codec_type=="audio") | .index' 2>/dev/null | head -n 1)
-    
-    if [ -n "$eng_stream" ]; then
-        echo "Using first available audio stream at index $eng_stream"
-        echo "$eng_stream"
-        return
-    fi
-    
-    echo "No audio stream found"
+    echo "DEBUG: No audio streams found" >&2
     return 1
 }
 
@@ -82,15 +81,20 @@ process_file() {
     if [ "$file_size" -gt 10737418240 ]; then  # 10GB
         thread_count=$THREADS
     else
-        thread_count=$((THREADS / 1))
+        thread_count=$((THREADS / 2))
     fi
 
     # Find English audio stream
     audio_stream=$(find_eng_audio_stream "$input_file")
-    if [ $? -ne 0 ]; then
-        echo "Error: No suitable audio stream found"
+    stream_status=$?
+    
+    if [ $stream_status -ne 0 ]; then
+        echo "Error: No suitable audio stream found in $input_file"
+        # Attempt to list all streams for debugging
+        ffprobe -v error -show_entries stream=index:stream_tags=language,title -of csv=p=0 "$input_file"
         exit 1
     fi
+    
     echo "Using audio stream index: $audio_stream"
 
     # Create sanitized temporary filename
@@ -120,7 +124,7 @@ process_file() {
     
     # Process with FFmpeg using optimized settings
     ffmpeg -nostdin -y \
-        -analyzeduration 200M -probesize 200M \
+        -analyzeduration 100M -probesize 100M \
         -i "$input_file" \
         -map 0:v:0 -c:v copy \
         -map "0:a:${audio_stream}" \
