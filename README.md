@@ -45,7 +45,7 @@ go version
 ```bash
 # Install FFmpeg and dependencies
 apt install -y ffmpeg
-
+apt-get update && apt-get install -y jq
 # Verify FFmpeg installation
 ffmpeg -version
 ```
