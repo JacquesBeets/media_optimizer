@@ -26,7 +26,7 @@ find_eng_audio_stream() {
     if ! command -v jq &> /dev/null; then
         echo "Error: jq is required but not installed" >&2
         return 1
-    }
+    fi
     
     # Find audio streams and their properties using jq
     local selected_stream
