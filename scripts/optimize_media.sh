@@ -14,6 +14,28 @@ sanitize_filename() {
     echo "$filename" | tr -cd '[:alnum:]._-' | tr ' ' '_'
 }
 
+# Function to find English audio stream
+find_eng_audio_stream() {
+    local input_file="$1"
+    # First try to find stream with eng language tag
+    local eng_stream=$(ffprobe -v quiet -print_format json -show_streams -i "$input_file" | \
+        jq -r '.streams[] | select(.codec_type=="audio" and .tags.language=="eng") | .index' 2>/dev/null | head -n 1)
+    
+    if [ -z "$eng_stream" ]; then
+        # If no eng tag found, try to find stream with "English" in title
+        eng_stream=$(ffprobe -v quiet -print_format json -show_streams -i "$input_file" | \
+            jq -r '.streams[] | select(.codec_type=="audio" and (.tags.title | ascii_downcase | contains("english"))) | .index' 2>/dev/null | head -n 1)
+    fi
+    
+    if [ -z "$eng_stream" ]; then
+        # If still no English stream found, use the first audio stream
+        eng_stream=$(ffprobe -v quiet -print_format json -show_streams -i "$input_file" | \
+            jq -r '.streams[] | select(.codec_type=="audio") | .index' 2>/dev/null | head -n 1)
+    fi
+    
+    echo "${eng_stream:-0}"  # Default to 0 if no audio stream found
+}
+
 # Function to process a single file
 process_file() {
     input_file="$1"
@@ -39,13 +61,9 @@ process_file() {
         thread_count=$((THREADS / 2))
     fi
 
-    # Get English audio stream if available
-    audio_stream=0
-    audio_info=$(ffprobe -v quiet -print_format json -show_streams "$input_file")
-    eng_stream=$(echo "$audio_info" | jq -r '.streams[] | select(.codec_type=="audio" and .tags.language=="eng") | .index' 2>/dev/null)
-    if [ ! -z "$eng_stream" ]; then
-        audio_stream=$eng_stream
-    fi
+    # Find English audio stream
+    audio_stream=$(find_eng_audio_stream "$input_file")
+    echo "Using audio stream index: $audio_stream"
 
     # Create sanitized temporary filename
     temp_id="$(date +%s%N)"
@@ -73,11 +91,12 @@ process_file() {
     echo "total_duration=$duration" > "$progress_file"
     
     # Process with FFmpeg using optimized settings
+    # Note: We only map video and English audio, ignoring subtitles and other audio streams
     ffmpeg -nostdin -y \
         -analyzeduration 100M -probesize 100M \
         -i "$input_file" \
         -map 0:v:0 -c:v copy \
-        -map "0:a:${audio_stream}" \
+        -map "0:${audio_stream}" \
         -c:a ac3 \
         -ac 2 \
         -b:a 384k \
