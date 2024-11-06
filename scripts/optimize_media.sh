@@ -20,33 +20,43 @@ find_eng_audio_stream() {
     local stream_info
     stream_info=$(ffprobe -v quiet -print_format json -show_streams -i "$input_file")
     
-    # Try to find English audio stream
-    # First, look for eng language tag
-    local eng_index
-    eng_index=$(echo "$stream_info" | jq -r '.streams[] | select(.codec_type=="audio" and .tags.language=="eng") | .index' 2>/dev/null | head -n 1)
+    # Specific check for stream #0:2 (English AC3 stream)
+    local eng_stream=$(echo "$stream_info" | jq -r '.streams[] | select(.index==2 and .codec_type=="audio" and .tags.language=="eng") | .index' 2>/dev/null)
     
-    if [ -n "$eng_index" ]; then
-        echo "Found English audio stream by language tag at index $eng_index"
-        return "$eng_index"
+    if [ -n "$eng_stream" ]; then
+        echo "Found predefined English audio stream at index 2"
+        echo "$eng_stream"
+        return
+    fi
+    
+    # Try to find English audio stream by language tag
+    eng_stream=$(echo "$stream_info" | jq -r '.streams[] | select(.codec_type=="audio" and .tags.language=="eng") | .index' 2>/dev/null | head -n 1)
+    
+    if [ -n "$eng_stream" ]; then
+        echo "Found English audio stream by language tag at index $eng_stream"
+        echo "$eng_stream"
+        return
     fi
     
     # Then look for English in title
-    eng_index=$(echo "$stream_info" | jq -r '.streams[] | select(.codec_type=="audio" and (.tags.title | ascii_downcase | contains("english"))) | .index' 2>/dev/null | head -n 1)
+    eng_stream=$(echo "$stream_info" | jq -r '.streams[] | select(.codec_type=="audio" and (.tags.title | ascii_downcase | contains("english"))) | .index' 2>/dev/null | head -n 1)
     
-    if [ -n "$eng_index" ]; then
-        echo "Found English audio stream by title at index $eng_index"
-        return "$eng_index"
+    if [ -n "$eng_stream" ]; then
+        echo "Found English audio stream by title at index $eng_stream"
+        echo "$eng_stream"
+        return
     fi
     
     # Finally, just use the first audio stream
-    eng_index=$(echo "$stream_info" | jq -r '.streams[] | select(.codec_type=="audio") | .index' 2>/dev/null | head -n 1)
+    eng_stream=$(echo "$stream_info" | jq -r '.streams[] | select(.codec_type=="audio") | .index' 2>/dev/null | head -n 1)
     
-    if [ -n "$eng_index" ]; then
-        echo "Using first available audio stream at index $eng_index"
-        return "$eng_index"
+    if [ -n "$eng_stream" ]; then
+        echo "Using first available audio stream at index $eng_stream"
+        echo "$eng_stream"
+        return
     fi
     
-    echo "No audio stream found, using index 1"
+    echo "No audio stream found"
     return 1
 }
 
@@ -72,12 +82,15 @@ process_file() {
     if [ "$file_size" -gt 10737418240 ]; then  # 10GB
         thread_count=$THREADS
     else
-        thread_count=$((THREADS / 2))
+        thread_count=$((THREADS / 1))
     fi
 
     # Find English audio stream
-    find_eng_audio_stream "$input_file"
-    audio_stream=$?
+    audio_stream=$(find_eng_audio_stream "$input_file")
+    if [ $? -ne 0 ]; then
+        echo "Error: No suitable audio stream found"
+        exit 1
+    fi
     echo "Using audio stream index: $audio_stream"
 
     # Create sanitized temporary filename
@@ -107,10 +120,10 @@ process_file() {
     
     # Process with FFmpeg using optimized settings
     ffmpeg -nostdin -y \
-        -analyzeduration 100M -probesize 100M \
+        -analyzeduration 200M -probesize 200M \
         -i "$input_file" \
         -map 0:v:0 -c:v copy \
-        -map 0:a:$audio_stream \
+        -map "0:a:${audio_stream}" \
         -c:a ac3 \
         -ac 2 \
         -b:a 384k \
