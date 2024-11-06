@@ -24,11 +24,11 @@ find_eng_audio_stream() {
     
     # Debug: Print full stream information
     echo "DEBUG: Full stream information:" >&2
-    echo "$stream_info" | jq '.' >&2
+    echo "$stream_info" >&2
     
     # Find audio streams
     local audio_streams
-    audio_streams=$(echo "$stream_info" | jq -r '.streams[] | select(.codec_type == "audio") | .index' 2>/dev/null)
+    audio_streams=$(echo "$stream_info" | grep -o '"index": *[0-9]*' | grep -o '[0-9]*' | tr '\n' ' ')
     
     echo "DEBUG: Found audio stream indices: $audio_streams" >&2
     
@@ -36,21 +36,21 @@ find_eng_audio_stream() {
     local selected_stream
     
     # First, look for stream with index 2 and 'eng' language
-    selected_stream=$(echo "$stream_info" | jq -r '.streams[] | select(.index == 2 and .tags.language == "eng") | .index' 2>/dev/null)
+    selected_stream=$(echo "$stream_info" | grep -q '"index": *2.*"language": *"eng"' && echo 2)
     
     # If not found, look for any stream with 'eng' language
     if [ -z "$selected_stream" ]; then
-        selected_stream=$(echo "$stream_info" | jq -r '.streams[] | select(.tags.language == "eng") | .index' 2>/dev/null | head -n 1)
+        selected_stream=$(echo "$stream_info" | grep -o '"index": *[0-9]*.*"language": *"eng"' | head -n 1 | grep -o '"index": *[0-9]*' | grep -o '[0-9]*')
     fi
     
     # If still not found, look for stream with "English" in title
     if [ -z "$selected_stream" ]; then
-        selected_stream=$(echo "$stream_info" | jq -r '.streams[] | select(.tags.title | ascii_downcase | contains("english")) | .index' 2>/dev/null | head -n 1)
+        selected_stream=$(echo "$stream_info" | grep -o '"index": *[0-9]*.*"title": *".*[Ee]nglish' | head -n 1 | grep -o '"index": *[0-9]*' | grep -o '[0-9]*')
     fi
     
     # If still not found, use first audio stream
     if [ -z "$selected_stream" ]; then
-        selected_stream=$(echo "$audio_streams" | head -n 1)
+        selected_stream=$(echo "$audio_streams" | cut -d' ' -f1)
     fi
     
     # Final check
