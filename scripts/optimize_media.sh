@@ -38,18 +38,19 @@ find_eng_audio_stream() {
     # First, look for stream 2 with English language
     selected_stream=$(echo "$stream_info" | grep -q '"index": *2.*"language": *"eng"' && echo 2)
     
-    # If not found, look for any stream with 'eng' language
+    # If not found, look for stream 2 with English title
     if [ -z "$selected_stream" ]; then
-        selected_stream=$(echo "$stream_info" | 
-            awk -F'"' '/"index": *[0-9]+.*"codec_type": *"audio".*"language": *"eng"/ {print $4}' | 
-            head -n 1)
+        selected_stream=$(echo "$stream_info" | grep -q '"index": *2.*"title": *".*[Ee]nglish"' && echo 2)
+    fi
+    
+    # If still not found, look for any stream with 'eng' language
+    if [ -z "$selected_stream" ]; then
+        selected_stream=$(echo "$stream_info" | grep -o '"index": *[0-9]*.*"language": *"eng"' | head -n 1 | grep -o '"index": *[0-9]*' | grep -o '[0-9]*')
     fi
     
     # If still not found, look for stream with "English" in title
     if [ -z "$selected_stream" ]; then
-        selected_stream=$(echo "$stream_info" | 
-            awk -F'"' '/"index": *[0-9]+.*"codec_type": *"audio".*"title": *".*[Ee]nglish/ {print $4}' | 
-            head -n 1)
+        selected_stream=$(echo "$stream_info" | grep -o '"index": *[0-9]*.*"title": *".*[Ee]nglish"' | head -n 1 | grep -o '"index": *[0-9]*' | grep -o '[0-9]*')
     fi
     
     # If still not found, use first audio stream
