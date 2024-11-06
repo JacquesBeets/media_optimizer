@@ -20,43 +20,49 @@ find_eng_audio_stream() {
     
     # Get stream information with enhanced verbosity
     local stream_info
-    stream_info=$(ffprobe -v debug -show_streams -print_format json "$input_file")
+    stream_info=$(ffprobe -v error -show_streams -print_format json "$input_file")
     
     # Debug: Print full stream information
     echo "DEBUG: Full stream information:" >&2
-    echo "$stream_info" | jq . >&2
+    echo "$stream_info" >&2
     
-    # Detect audio streams with more robust parsing
+    # Detect audio streams
     local audio_streams
-    audio_streams=$(echo "$stream_info" | jq -r '.streams[] | select(.codec_type == "audio") | .index')
+    audio_streams=$(echo "$stream_info" | grep -o '"index": *[0-9]*.*"codec_type": *"audio"' | grep -o '"index": *[0-9]*' | grep -o '[0-9]*')
     
     echo "DEBUG: Found audio stream indices: $audio_streams" >&2
     
     # Detailed stream information extraction
     local stream_details
-    stream_details=$(echo "$stream_info" | jq -r '.streams[] | select(.codec_type == "audio") | 
-        "Index: \(.index), Codec: \(.codec_name), Channels: \(.channels), Language: \(.tags.language // "N/A"), Title: \(.tags.title // "N/A")"')
+    stream_details=$(echo "$stream_info" | grep -E '"index"|"codec_name"|"channels"|"language"|"title"')
     
     echo "DEBUG: Audio Stream Details:" >&2
     echo "$stream_details" >&2
     
-    # Prioritize stream selection with more flexible matching
+    # Prioritize stream selection
     local selected_stream
     
-    # First, look for streams with explicit English language
-    selected_stream=$(echo "$stream_info" | jq -r '.streams[] | 
-        select(.codec_type == "audio" and (.tags.language | ascii_downcase | contains("eng"))) | .index' | head -n 1)
+    # First, look for stream 2 with English language or title
+    selected_stream=$(echo "$stream_info" | grep -q '"index": *2.*"language": *"eng"' && echo 2)
     
-    # If not found, look for streams with "English" in title
+    # If not found, look for stream 2 with English title
     if [ -z "$selected_stream" ]; then
-        selected_stream=$(echo "$stream_info" | jq -r '.streams[] | 
-            select(.codec_type == "audio" and (.tags.title | ascii_downcase | contains("english"))) | .index' | head -n 1)
+        selected_stream=$(echo "$stream_info" | grep -q '"index": *2.*"title": *".*[Ee]nglish"' && echo 2)
+    fi
+    
+    # If still not found, look for any stream with 'eng' language
+    if [ -z "$selected_stream" ]; then
+        selected_stream=$(echo "$stream_info" | grep -o '"index": *[0-9]*.*"language": *"eng"' | head -n 1 | grep -o '"index": *[0-9]*' | grep -o '[0-9]*')
+    fi
+    
+    # If still not found, look for stream with "English" in title
+    if [ -z "$selected_stream" ]; then
+        selected_stream=$(echo "$stream_info" | grep -o '"index": *[0-9]*.*"title": *".*[Ee]nglish"' | head -n 1 | grep -o '"index": *[0-9]*' | grep -o '[0-9]*')
     fi
     
     # If still not found, prefer 5.1 or stereo streams
     if [ -z "$selected_stream" ]; then
-        selected_stream=$(echo "$stream_info" | jq -r '.streams[] | 
-            select(.codec_type == "audio" and (.channels == 6 or .channels == 2)) | .index' | head -n 1)
+        selected_stream=$(echo "$stream_info" | grep -o '"index": *[0-9]*.*"channels": *\(6\|2\)' | head -n 1 | grep -o '"index": *[0-9]*' | grep -o '[0-9]*')
     fi
     
     # Final fallback: first audio stream
