@@ -18,76 +18,38 @@ sanitize_filename() {
 find_eng_audio_stream() {
     local input_file="$1"
     
-    # Get stream information with enhanced verbosity
+    # Get stream information
     local stream_info
     stream_info=$(ffprobe -v error -show_streams -print_format json "$input_file")
     
-    # Debug: Print full stream information
-    echo "DEBUG: Full stream information:" >&2
-    echo "$stream_info" >&2
+    # Use jq to properly parse JSON and find audio streams
+    if ! command -v jq &> /dev/null; then
+        echo "Error: jq is required but not installed" >&2
+        return 1
+    }
     
-    # Detect audio streams with explicit checks
-    local audio_streams=$(echo "$stream_info" | grep -o '"index": *[0-9]*.*"codec_type": *"audio"' | grep -o '"index": *[0-9]*' | grep -o '[0-9]*')
+    # Find audio streams and their properties using jq
+    local selected_stream
+    selected_stream=$(echo "$stream_info" | jq -r '
+        .streams
+        | to_entries
+        | .[]
+        | select(.value.codec_type == "audio")
+        | .value
+        | select(
+            (.tags.language == "eng" and .channels == 6) or
+            .tags.language == "eng" or
+            .channels == 6 or
+            true
+        )
+        | .index
+        ' | head -n 1)
     
-    echo "DEBUG: Found audio stream indices: $audio_streams" >&2
-    
-    # Detailed stream information extraction
-    local stream_details=$(echo "$stream_info" | grep -E '"index"|"codec_name"|"channels"|"language"|"title"')
-    
-    echo "DEBUG: Audio Stream Details:" >&2
-    echo "$stream_details" >&2
-    
-    # Prioritize stream selection
-    local selected_stream=""
-    
-    # First, look for stream with English language and 5.1 channels
-    for stream in $audio_streams; do
-        local lang_check=$(echo "$stream_info" | grep -E "\"index\": *$stream.*\"language\": *\"eng\"")
-        local channel_check=$(echo "$stream_info" | grep -E "\"index\": *$stream.*\"channels\": *6")
-        local title_check=$(echo "$stream_info" | grep -E "\"index\": *$stream.*\"title\": *\".*[Ee]nglish\"")
-        
-        if [ -n "$lang_check" ] && [ -n "$channel_check" ]; then
-            selected_stream=$stream
-            break
-        fi
-    done
-    
-    # If no English 5.1 stream, look for any English stream
-    if [ -z "$selected_stream" ]; then
-        for stream in $audio_streams; do
-            local lang_check=$(echo "$stream_info" | grep -E "\"index\": *$stream.*\"language\": *\"eng\"")
-            local title_check=$(echo "$stream_info" | grep -E "\"index\": *$stream.*\"title\": *\".*[Ee]nglish\"")
-            
-            if [ -n "$lang_check" ] || [ -n "$title_check" ]; then
-                selected_stream=$stream
-                break
-            fi
-        done
-    fi
-    
-    # If no English stream, prefer 5.1 or stereo streams
-    if [ -z "$selected_stream" ]; then
-        for stream in $audio_streams; do
-            local channel_check=$(echo "$stream_info" | grep -E "\"index\": *$stream.*\"channels\": *\(6\|2\)")
-            if [ -n "$channel_check" ]; then
-                selected_stream=$stream
-                break
-            fi
-        done
-    fi
-    
-    # Final fallback: first audio stream
-    if [ -z "$selected_stream" ]; then
-        selected_stream=$(echo "$audio_streams" | head -n 1)
-    fi
-    
-    # Final check
     if [ -z "$selected_stream" ]; then
         echo "Error: No audio streams found" >&2
         return 1
     fi
     
-    echo "DEBUG: Selected audio stream index: $selected_stream" >&2
     echo "$selected_stream"
     return 0
 }
