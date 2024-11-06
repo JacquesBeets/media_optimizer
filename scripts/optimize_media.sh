@@ -17,23 +17,40 @@ sanitize_filename() {
 # Function to find English audio stream
 find_eng_audio_stream() {
     local input_file="$1"
-    # First try to find stream with eng language tag
-    local eng_stream=$(ffprobe -v quiet -print_format json -show_streams -i "$input_file" | \
-        jq -r '.streams[] | select(.codec_type=="audio" and .tags.language=="eng") | .index' 2>/dev/null | head -n 1)
+    local stream_info
+    stream_info=$(ffprobe -v quiet -print_format json -show_streams -i "$input_file")
     
-    if [ -z "$eng_stream" ]; then
-        # If no eng tag found, try to find stream with "English" in title
-        eng_stream=$(ffprobe -v quiet -print_format json -show_streams -i "$input_file" | \
-            jq -r '.streams[] | select(.codec_type=="audio" and (.tags.title | ascii_downcase | contains("english"))) | .index' 2>/dev/null | head -n 1)
+    # Try to find English audio stream
+    local eng_index
+    # First, look for eng language tag
+    eng_index=$(echo "$stream_info" | jq -r '.streams[] | select(.codec_type=="audio" and .tags.language=="eng") | .index' 2>/dev/null | head -n 1)
+    
+    if [ -n "$eng_index" ]; then
+        echo "Found English audio stream by language tag: $eng_index"
+        echo "$eng_index"
+        return
     fi
     
-    if [ -z "$eng_stream" ]; then
-        # If still no English stream found, use the first audio stream
-        eng_stream=$(ffprobe -v quiet -print_format json -show_streams -i "$input_file" | \
-            jq -r '.streams[] | select(.codec_type=="audio") | .index' 2>/dev/null | head -n 1)
+    # Then look for English in title
+    eng_index=$(echo "$stream_info" | jq -r '.streams[] | select(.codec_type=="audio" and (.tags.title | ascii_downcase | contains("english"))) | .index' 2>/dev/null | head -n 1)
+    
+    if [ -n "$eng_index" ]; then
+        echo "Found English audio stream by title: $eng_index"
+        echo "$eng_index"
+        return
     fi
     
-    echo "${eng_stream:-0}"  # Default to 0 if no audio stream found
+    # Finally, just use the first audio stream
+    eng_index=$(echo "$stream_info" | jq -r '.streams[] | select(.codec_type=="audio") | .index' 2>/dev/null | head -n 1)
+    
+    if [ -n "$eng_index" ]; then
+        echo "Using first available audio stream: $eng_index"
+        echo "$eng_index"
+        return
+    fi
+    
+    echo "No audio stream found, using 0"
+    echo "0"
 }
 
 # Function to process a single file
@@ -91,19 +108,19 @@ process_file() {
     echo "total_duration=$duration" > "$progress_file"
     
     # Process with FFmpeg using optimized settings
-    # Note: We only map video and English audio, ignoring subtitles and other audio streams
     ffmpeg -nostdin -y \
-        -analyzeduration 100M -probesize 100M \
+        -analyzeduration 200M -probesize 200M \
         -i "$input_file" \
         -map 0:v:0 -c:v copy \
-        -map "0:${audio_stream}" \
-        -c:a ac3 \
-        -ac 2 \
-        -b:a 384k \
-        -af "volume=1.5,dynaudnorm=f=150:g=15:p=0.7,loudnorm=I=-16:TP=-1.5:LRA=11" \
+        -map "0:a:${audio_stream}" \
+        -c:a:0 ac3 \
+        -ac:a:0 2 \
+        -b:a:0 384k \
+        -filter:a:0 "volume=1.5,dynaudnorm=f=150:g=15:p=0.7,loudnorm=I=-16:TP=-1.5:LRA=11" \
         -metadata:s:a:0 title="2.1 Optimized" \
         -metadata:s:a:0 language=eng \
         -movflags +faststart \
+        -max_muxing_queue_size 1024 \
         -threads "$thread_count" \
         -progress "$progress_file" \
         "$temp_output" || exit 1
