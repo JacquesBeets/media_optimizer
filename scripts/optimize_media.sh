@@ -70,7 +70,7 @@ process_file() {
     ffmpeg -nostdin -y \
         -analyzeduration 400000000  -probesize 400000000  \
         -i "$input_file" \
-        -map 0:v:0 -map -0:s -c:v libx265 -preset medium -crf 26 \
+        -map 0:v:0 -map -0:s -c:v libx265 -preset medium -crf 24 \
         -map 0:m:language:eng -c:a ac3 -ac 2 -b:a 384k \
         -filter:a "volume=1.5,dynaudnorm=f=150:g=15:p=0.7,loudnorm=I=-16:TP=-1.5:LRA=11" \
         -metadata:s:a title="2.1 Optimized" \
