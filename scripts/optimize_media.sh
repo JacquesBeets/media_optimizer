@@ -77,6 +77,7 @@ process_file() {
         -metadata:s:a language=eng \
         -movflags +faststart \
         -max_muxing_queue_size 2048 \
+        -sn \
         -threads "$thread_count" \
         -progress "$progress_file" \
         "$temp_output" || exit 1
