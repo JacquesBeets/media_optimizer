@@ -37,7 +37,7 @@ process_file() {
     if [ "$file_size" -gt 10737418240 ]; then  # 10GB
         thread_count=$THREADS
     else
-        thread_count=$((THREADS / 1))
+        thread_count=$((THREADS - 1))
     fi
 
 
@@ -68,7 +68,7 @@ process_file() {
     
     # Process with FFmpeg using optimized settings
     ffmpeg -nostdin -y \
-        -analyzeduration 200M -probesize 200M \
+        -analyzeduration 400M -probesize 400M \
         -i "$input_file" \
         -map 0:v:0 -c:v libx265 -preset medium -crf 26 \
         -map 0:m:language:eng -c:a ac3 -ac 2 -b:a 384k \
@@ -76,7 +76,7 @@ process_file() {
         -metadata:s:a title="2.1 Optimized" \
         -metadata:s:a language=eng \
         -movflags +faststart \
-        -max_muxing_queue_size 2048 \
+        -max_muxing_queue_size 8192 \
         -sn \
         -threads "$thread_count" \
         -progress "$progress_file" \
