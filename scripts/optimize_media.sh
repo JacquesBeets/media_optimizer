@@ -14,45 +14,6 @@ sanitize_filename() {
     echo "$filename" | tr -cd '[:alnum:]._-' | tr ' ' '_'
 }
 
-# Function to find English audio stream
-find_eng_audio_stream() {
-    local input_file="$1"
-    
-    # Get stream information
-    local stream_info
-    stream_info=$(ffprobe -v error -show_streams -print_format json "$input_file")
-    
-    # Use jq to properly parse JSON and find audio streams
-    if ! command -v jq &> /dev/null; then
-        echo "Error: jq is required but not installed" >&2
-        return 1
-    fi
-    
-    # Find audio streams and their properties using jq
-    local selected_stream
-    selected_stream=$(echo "$stream_info" | jq -r '
-        .streams
-        | to_entries
-        | .[]
-        | select(.value.codec_type == "audio")
-        | .value
-        | select(
-            (.tags.language == "eng" and .channels == 6) or
-            .tags.language == "eng" or
-            .channels == 6 or
-            true
-        )
-        | .index
-        ' | head -n 1)
-    
-    if [ -z "$selected_stream" ]; then
-        echo "Error: No audio streams found" >&2
-        return 1
-    fi
-    
-    echo "$selected_stream"
-    return 0
-}
 
 # Function to process a single file
 process_file() {
@@ -76,21 +37,9 @@ process_file() {
     if [ "$file_size" -gt 10737418240 ]; then  # 10GB
         thread_count=$THREADS
     else
-        thread_count=$((THREADS / 2))
+        thread_count=$((THREADS / 1))
     fi
 
-    # Find English audio stream
-    audio_stream=$(find_eng_audio_stream "$input_file")
-    stream_status=$?
-    
-    if [ $stream_status -ne 0 ]; then
-        echo "Error: No suitable audio stream found in $input_file"
-        # List all streams for debugging
-        ffprobe -v error -show_streams -print_format json "$input_file"
-        exit 1
-    fi
-    
-    echo "Using audio stream index: $audio_stream"
 
     # Create sanitized temporary filename
     temp_id="$(date +%s%N)"
@@ -119,21 +68,19 @@ process_file() {
     
     # Process with FFmpeg using optimized settings
     ffmpeg -nostdin -y \
-        -analyzeduration 100M -probesize 100M \
+        -analyzeduration 200M -probesize 200M \
         -i "$input_file" \
-        -map 0:v:0 -c:v copy \
-        -map "0:a:${audio_stream}" \
-        -c:a ac3 \
-        -ac 2 \
-        -b:a 384k \
+        -map 0:v:0 -c:v libx265 -preset medium -crf 26 \
+        -map 0:m:language:eng -c:a ac3 -ac 2 -b:a 384k \
         -filter:a "volume=1.5,dynaudnorm=f=150:g=15:p=0.7,loudnorm=I=-16:TP=-1.5:LRA=11" \
-        -metadata:s:a:0 title="2.1 Optimized" \
-        -metadata:s:a:0 language=eng \
+        -metadata:s:a title="2.1 Optimized" \
+        -metadata:s:a language=eng \
         -movflags +faststart \
-        -max_muxing_queue_size 1024 \
+        -max_muxing_queue_size 2048 \
         -threads "$thread_count" \
         -progress "$progress_file" \
         "$temp_output" || exit 1
+
 
     # Move the file to final destination
     if [ -f "$temp_output" ]; then
