@@ -37,7 +37,7 @@ process_file() {
     if [ "$file_size" -gt 10737418240 ]; then  # 10GB
         thread_count=$THREADS
     else
-        thread_count=$((THREADS - 1))
+        thread_count=$((THREADS / 2))
     fi
 
 
