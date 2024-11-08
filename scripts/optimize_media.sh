@@ -2,10 +2,10 @@
 
 # Configuration
 THREADS=$(nproc)  # Get number of CPU threads
-MEM_LIMIT="4G"    # Memory limit per FFmpeg process
+MEM_LIMIT="6G"    # Memory limit per FFmpeg process
 NICE_LEVEL=10     # Nice level for CPU priority
-IO_CLASS="best-effort"
-IO_PRIORITY=7     # I/O priority (0-7, 7 being lowest)
+IO_CLASS="realitime"  # I/O class (none, realtime, best-effort, idle)
+IO_PRIORITY=5     # I/O priority (0-7, 7 being lowest)
 
 # Function to sanitize filename for temporary files
 sanitize_filename() {
@@ -35,7 +35,7 @@ process_file() {
     # Calculate optimal thread count based on file size
     file_size=$(stat -c %s "$input_file")
     if [ "$file_size" -gt 10737418240 ]; then  # 10GB
-        thread_count=$THREADS
+        thread_count=$((THREADS - 1))
     else
         thread_count=$((THREADS / 2))
     fi
