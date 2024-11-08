@@ -24,6 +24,8 @@ process_file() {
     basename="${filename%.*}"
     output_file="${dirname}/${basename}_optimized.${extension}"
     temp_dir="/tmp/ffmpeg_processing"
+    echo "Checking video codec..."
+    codec=$(ffprobe -v error -select_streams v:0 -show_entries stream=codec_name -of default=nw=1:nk=1 "$input_file" 2>&1)
     
     # Create temp directory if it doesn't exist
     mkdir -p "$temp_dir"
@@ -49,6 +51,7 @@ process_file() {
     echo "Processing file: $input_file"
     echo "Temporary output: $temp_output"
     echo "Progress file: $progress_file"
+    echo "Current Video codec: $codec"
     
     # Function to cleanup on exit
     cleanup() {
@@ -65,33 +68,34 @@ process_file() {
     # Get duration for progress calculation
     duration=$(ffprobe -v quiet -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "$input_file")
     echo "total_duration=$duration" > "$progress_file"
-    
-    # Process with FFmpeg using optimized settings
-    # ffmpeg -nostdin -y \
-    #     -analyzeduration 25000000000 -probesize 25000000000 \
-    #     -i "$input_file" \
-    #     -map 0:v:0 -map 0:s? -c:v libx265 -preset medium -crf 24 \
-    #     -map 0:m:language:eng -c:a ac3 -ac 2 -b:a 384k \
-    #     -filter:a "volume=1.5,dynaudnorm=f=150:g=15:p=0.7,loudnorm=I=-16:TP=-1.5:LRA=11" \
-    #     -metadata:s:a title="2.1 Optimized" \
-    #     -metadata:s:a language=eng \
-    #     -movflags +faststart \
-    #     -max_muxing_queue_size 8192 \
-    #     -c:s copy \
-    #     -threads "$thread_count" \
-    #     -progress "$progress_file" \
-    #     "$temp_output" || exit 1
 
-    ffmpeg -nostdin -y \
-        -i "$input_file" \
-        -c:v libx265 -preset medium -crf 24 \
-        -map 0:m:language:eng -c:a ac3 -ac 2 -b:a 384k \
-        -filter:a "volume=1.5,dynaudnorm=f=150:g=15:p=0.7,loudnorm=I=-16:TP=-1.5:LRA=11" \
-        -metadata:s:a title="2.1 Optimized" \
-        -metadata:s:a language=eng \
-        -c:s copy \
-        -progress "$progress_file" \
-        "$temp_output" || exit 1
+    # Only process audio if codec is HEVC
+    if [ "$codec" = "hevc" ]; then
+        echo "Video already in HEVC format, processing audio only..."
+        ffmpeg -nostdin -y \
+            -i "$input_file" \
+            -c:v copy \
+            -map 0:m:language:eng -c:a ac3 -ac 2 -b:a 384k \
+            -filter:a "volume=1.5,dynaudnorm=f=150:g=15:p=0.7,loudnorm=I=-16:TP=-1.5:LRA=11" \
+            -metadata:s:a title="2.1 Optimized" \
+            -metadata:s:a language=eng \
+            -c:s copy \
+            -progress "$progress_file" \
+            "$temp_output" || exit 1
+    else
+        echo "Converting video to HEVC..."
+        ffmpeg -nostdin -y \
+            -i "$input_file" \
+            -map 0:v:0 -c:v libx265 -preset medium -crf 24 \
+            -map 0:m:language:eng -c:a ac3 -ac 2 -b:a 384k \
+            -filter:a "volume=1.5,dynaudnorm=f=150:g=15:p=0.7,loudnorm=I=-16:TP=-1.5:LRA=11" \
+            -metadata:s:a title="2.1 Optimized" \
+            -metadata:s:a language=eng \
+            -c:s copy \
+            -progress "$progress_file" \
+            "$temp_output" || exit 1
+    fi
+
 
 
     # Move the file to final destination
