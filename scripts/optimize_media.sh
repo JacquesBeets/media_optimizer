@@ -4,7 +4,7 @@
 THREADS=$(nproc)  # Get number of CPU threads
 MEM_LIMIT="6G"    # Memory limit per FFmpeg process
 NICE_LEVEL=10     # Nice level for CPU priority
-IO_CLASS="realitime"  # I/O class (none, realtime, best-effort, idle)
+IO_CLASS="realtime"  # I/O class (none, realtime, best-effort, idle)
 IO_PRIORITY=5     # I/O priority (0-7, 7 being lowest)
 
 # Function to sanitize filename for temporary files
