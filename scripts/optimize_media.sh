@@ -80,26 +80,28 @@ process_file() {
             -metadata:s:a title="2.1 Optimized" \
             -metadata:s:a language=eng \
             -map 0:s? -c:s copy \
+            -movflags +faststart \
             -progress "$progress_file" \
-            "$temp_output" || exit 1
+            "$temp_output"
     else
         echo "Converting video to HEVC..."
         ffmpeg -nostdin -y \
             -i "$input_file" \
             -map 0:v:0 -c:v libx265 -preset medium -crf 24 \
-            -map 0:m:language:eng -c:a ac3 -ac 2 -b:a 384k \
+            -map 0:a:m:language:eng -c:a ac3 -ac 2 -b:a 384k \
             -filter:a "volume=1.5,dynaudnorm=f=150:g=15:p=0.7,loudnorm=I=-16:TP=-1.5:LRA=11" \
             -metadata:s:a title="2.1 Optimized" \
             -metadata:s:a language=eng \
-            -c:s copy \
+            -map 0:s? -c:s copy \
+            -movflags +faststart \
             -progress "$progress_file" \
-            "$temp_output" || exit 1
+            "$temp_output"
     fi
 
 
 
-    # Move the file to final destination
-    if [ -f "$temp_output" ]; then
+    # Check FFmpeg exit status
+    if [ $? -eq 0 ] && [ -f "$temp_output" ]; then
         mv "$temp_output" "$output_file"
         echo "Successfully processed: $input_file"
         echo "Output saved to: $output_file"
