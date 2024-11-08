@@ -74,12 +74,12 @@ process_file() {
         echo "Video already in HEVC format, processing audio only..."
         ffmpeg -nostdin -y \
             -i "$input_file" \
-            -c:v copy \
-            -map 0:m:language:eng -c:a ac3 -ac 2 -b:a 384k \
+            -map 0:v:0 -c:v copy \
+            -map 0:a:m:language:eng -c:a ac3 -ac 2 -b:a 384k \
             -filter:a "volume=1.5,dynaudnorm=f=150:g=15:p=0.7,loudnorm=I=-16:TP=-1.5:LRA=11" \
             -metadata:s:a title="2.1 Optimized" \
             -metadata:s:a language=eng \
-            -c:s copy \
+            -map 0:s? -c:s copy \
             -progress "$progress_file" \
             "$temp_output" || exit 1
     else
