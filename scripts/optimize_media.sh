@@ -67,18 +67,29 @@ process_file() {
     echo "total_duration=$duration" > "$progress_file"
     
     # Process with FFmpeg using optimized settings
+    # ffmpeg -nostdin -y \
+    #     -analyzeduration 25000000000 -probesize 25000000000 \
+    #     -i "$input_file" \
+    #     -map 0:v:0 -map 0:s? -c:v libx265 -preset medium -crf 24 \
+    #     -map 0:m:language:eng -c:a ac3 -ac 2 -b:a 384k \
+    #     -filter:a "volume=1.5,dynaudnorm=f=150:g=15:p=0.7,loudnorm=I=-16:TP=-1.5:LRA=11" \
+    #     -metadata:s:a title="2.1 Optimized" \
+    #     -metadata:s:a language=eng \
+    #     -movflags +faststart \
+    #     -max_muxing_queue_size 8192 \
+    #     -c:s copy \
+    #     -threads "$thread_count" \
+    #     -progress "$progress_file" \
+    #     "$temp_output" || exit 1
+
     ffmpeg -nostdin -y \
-        -analyzeduration 25000000000 -probesize 25000000000 \
         -i "$input_file" \
-        -map 0:v:0 -map 0:s? -c:v libx265 -preset medium -crf 24 \
+        -c:v libx265 -preset medium -crf 24 \
         -map 0:m:language:eng -c:a ac3 -ac 2 -b:a 384k \
         -filter:a "volume=1.5,dynaudnorm=f=150:g=15:p=0.7,loudnorm=I=-16:TP=-1.5:LRA=11" \
         -metadata:s:a title="2.1 Optimized" \
         -metadata:s:a language=eng \
-        -movflags +faststart \
-        -max_muxing_queue_size 8192 \
         -c:s copy \
-        -threads "$thread_count" \
         -progress "$progress_file" \
         "$temp_output" || exit 1
 
