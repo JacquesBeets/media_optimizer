@@ -75,12 +75,12 @@ process_file() {
         ffmpeg -nostdin -y \
             -analyzeduration 20G -probesize 20G \
             -i "$input_file" \
-            -map 0:v:0 -c:v copy \
-            -map 0:a:m:language:eng -c:a ac3 -ac 2 -b:a 384k \
+            -c:v copy \
+            -c:a ac3 -ac 2 -b:a 384k \
             -filter:a "volume=1.5,dynaudnorm=f=150:g=15:p=0.7,loudnorm=I=-16:TP=-1.5:LRA=11" \
             -metadata:s:a title="2.1 Optimized" \
             -metadata:s:a language=eng \
-            -map 0:s? -c:s copy \
+            -c:s copy \
             -movflags +faststart \
             -max_muxing_queue_size 1024 \
             -progress "$progress_file" \
@@ -90,19 +90,19 @@ process_file() {
         ffmpeg -nostdin -y \
             -analyzeduration 20G -probesize 20G \
             -i "$input_file" \
-            -map 0:v:0 -c:v libx265 -preset medium -crf 24 \
+            -c:v libx265 -preset medium -crf 24 \
             -x265-params "keyint=60:min-keyint=60:scenecut=0" \
             -g 60 \
-            -map 0:a:m:language:eng -c:a ac3 -ac 2 -b:a 384k \
+            -c:a ac3 -ac 2 -b:a 384k \
             -filter:a "volume=1.5,dynaudnorm=f=150:g=15:p=0.7,loudnorm=I=-16:TP=-1.5:LRA=11" \
             -metadata:s:a title="2.1 Optimized" \
             -metadata:s:a language=eng \
-            -map 0:s? -c:s copy \
+            -c:s copy \
             -movflags +faststart \
             -max_muxing_queue_size 1024 \
             -progress "$progress_file" \
             "$temp_output"
-    fi      
+    fi    
 
 
 
