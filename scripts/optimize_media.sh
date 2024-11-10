@@ -73,7 +73,7 @@ process_file() {
     # Only process audio if codec is HEVC
     if [ "$codec" = "hevc" ]; then
         echo "Video already in HEVC format, processing audio only..."
-        ffmpeg -loglevel debug -i "$input_file" -map 0:v:0 -map 0:a:m:language:eng -metadata:s:a title="2.1 Optimized" -metadata:s:a language=eng -c:v copy -c:a ac3 -ac 2 -b:a 384k -af "volume=1.5,loudnorm=I=-23:LRA=7:TP=-2" -f mp4 -movflags +faststart "$temp_output"
+        ffmpeg -loglevel debug -i "$input_file" -map 0:v:0 -map 0:a:m:language:eng -metadata:s:a title="2.1 Optimized" -metadata:s:a language=eng -c:v copy -c:a ac3 -ac 2 -b:a 384k -af "volume=1.5" -f mp4 -movflags +faststart "$temp_output"
         # ffmpeg -nostdin -y \
         #     -analyzeduration 20G -probesize 20G \
         #     -i "$input_file" \
