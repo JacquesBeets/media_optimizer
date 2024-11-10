@@ -45,7 +45,8 @@ process_file() {
 
     # Create sanitized temporary filename
     temp_id="$(date +%s%N)"
-    temp_output="${temp_dir}/temp_${temp_id}.${extension}"
+    # temp_output="${temp_dir}/temp_${temp_id}.${extension}"
+    temp_output="${temp_dir}/temp_${temp_id}.mp4"
     progress_file="${temp_dir}/progress_${temp_id}.txt"
     
     echo "Processing file: $input_file"
@@ -72,19 +73,20 @@ process_file() {
     # Only process audio if codec is HEVC
     if [ "$codec" = "hevc" ]; then
         echo "Video already in HEVC format, processing audio only..."
-        ffmpeg -nostdin -y \
-            -analyzeduration 20G -probesize 20G \
-            -i "$input_file" \
-            -c:v copy \
-            -c:a ac3 -ac 2 -b:a 384k \
-            -filter:a "volume=1.5,dynaudnorm=f=150:g=15:p=0.7,loudnorm=I=-16:TP=-1.5:LRA=11" \
-            -metadata:s:a title="2.1 Optimized" \
-            -metadata:s:a language=eng \
-            -c:s copy \
-            -movflags +faststart \
-            -max_muxing_queue_size 1024 \
-            -progress "$progress_file" \
-            "$temp_output"
+        ffmpeg -i "$input_file" -c:v copy -c:a ac3 -b:a 384k -f mp4 -movflags +faststart "$temp_output"
+        # ffmpeg -nostdin -y \
+        #     -analyzeduration 20G -probesize 20G \
+        #     -i "$input_file" \
+        #     -c:v copy \
+        #     -c:a ac3 -ac 2 -b:a 384k \
+        #     -filter:a "volume=1.5,dynaudnorm=f=150:g=15:p=0.7,loudnorm=I=-16:TP=-1.5:LRA=11" \
+        #     -metadata:s:a title="2.1 Optimized" \
+        #     -metadata:s:a language=eng \
+        #     -c:s copy \
+        #     -movflags +faststart \
+        #     -max_muxing_queue_size 1024 \
+        #     -progress "$progress_file" \
+        #     "$temp_output"
     else
         echo "Converting video to HEVC..."
         ffmpeg -nostdin -y \
@@ -103,7 +105,6 @@ process_file() {
             -progress "$progress_file" \
             "$temp_output"
     fi    
-
 
 
     # Check FFmpeg exit status
