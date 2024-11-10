@@ -111,6 +111,7 @@ process_file() {
     if [ $? -eq 0 ] && [ -f "$temp_output" ]; then
         mv "$temp_output" "$output_file"
         echo "Successfully processed: $input_file"
+        ffprobe -v error -select_streams a:0 -show_entries stream=channel_layout,channels -of default=noprint_wrappers=1  "$output_file"
         echo "Output saved to: $output_file"
         exit 0
     else
