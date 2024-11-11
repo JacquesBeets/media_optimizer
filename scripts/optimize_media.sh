@@ -74,36 +74,9 @@ process_file() {
     if [ "$codec" = "hevc" ]; then
         echo "Video already in HEVC format, processing audio only..."
         ffmpeg -loglevel debug -i "$input_file" -map 0:v:0 -map 0:a:m:language:eng -metadata:s:a title="2.1 Optimized" -metadata:s:a language=eng -c:v copy -c:a ac3 -ac 2 -b:a 384k -af "dynaudnorm=f=500:g=15:p=0.95:r=0.5,volume=1.2" -f mp4 -movflags +faststart "$temp_output"
-        # ffmpeg -nostdin -y \
-        #     -analyzeduration 20G -probesize 20G \
-        #     -i "$input_file" \
-        #     -c:v copy \
-        #     -c:a ac3 -ac 2 -b:a 384k \
-        #     -filter:a "volume=1.5,dynaudnorm=f=150:g=15:p=0.7,loudnorm=I=-16:TP=-1.5:LRA=11" \
-        #     -metadata:s:a title="2.1 Optimized" \
-        #     -metadata:s:a language=eng \
-        #     -c:s copy \
-        #     -movflags +faststart \
-        #     -max_muxing_queue_size 1024 \
-        #     -progress "$progress_file" \
-        #     "$temp_output"
     else
         echo "Converting video to HEVC..."
-        ffmpeg -nostdin -y \
-            -analyzeduration 20G -probesize 20G \
-            -i "$input_file" \
-            -c:v libx265 -preset medium -crf 24 \
-            -x265-params "keyint=60:min-keyint=60:scenecut=0" \
-            -g 60 \
-            -c:a ac3 -ac 2 -b:a 384k \
-            -filter:a "volume=1.5,dynaudnorm=f=150:g=15:p=0.7,loudnorm=I=-16:TP=-1.5:LRA=11" \
-            -metadata:s:a title="2.1 Optimized" \
-            -metadata:s:a language=eng \
-            -c:s copy \
-            -movflags +faststart \
-            -max_muxing_queue_size 1024 \
-            -progress "$progress_file" \
-            "$temp_output"
+        ffmpeg -loglevel debug -i "$input_file" -map 0:v:0 -map 0:a:m:language:eng -metadata:s:a title="2.1 Optimized" -metadata:s:a language=eng -c:v libx265 -preset medium -crf 26 -c:a ac3 -ac 2 -b:a 384k -af "dynaudnorm=f=500:g=15:p=0.95:r=0.5,volume=1.2" -f mp4 -movflags +faststart "$temp_output"
     fi    
 
 
