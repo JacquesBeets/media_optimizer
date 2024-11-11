@@ -76,7 +76,7 @@ process_file() {
         ffmpeg -loglevel debug -i "$input_file" -map 0:v:0 -map 0:a:m:language:eng -metadata:s:a title="2.1 Optimized" -metadata:s:a language=eng -c:v copy -c:a ac3 -ac 2 -b:a 384k -af "dynaudnorm=f=500:g=15:p=0.95:r=0.5,volume=1.2" -f mp4 -movflags +faststart "$temp_output"
     else
         echo "Converting video to HEVC..."
-        ffmpeg -loglevel debug -i "$input_file" -map 0:v:0 -map 0:a:m:language:eng -metadata:s:a title="2.1 Optimized" -metadata:s:a language=eng -c:v copy -c:a ac3 -ac 2 -b:a 384k -af "dynaudnorm=f=500:g=15:p=0.95:r=0.5,volume=1.2" -f mp4 -movflags +faststart "$temp_output"
+        ffmpeg -loglevel debug -i "$input_file" -map 0:v:0 -map 0:a:m:language:eng -metadata:s:a title="2.1 Optimized" -metadata:s:a language=eng -c:v copy -c:a ac3 -ac 2 -b:a 384k -af "volume=1.2" -f mp4 -movflags +faststart "$temp_output"
         # ffmpeg -loglevel debug -i "$input_file" -map 0:v:0 -map 0:a:m:language:eng -metadata:s:a title="2.1 Optimized" -metadata:s:a language=eng -c:v libx265 -preset medium -crf 26 -c:a ac3 -ac 2 -b:a 384k -af "dynaudnorm=f=500:g=15:p=0.95:r=0.5,volume=1.2" -f mp4 -movflags +faststart "$temp_output"
     fi    
 
